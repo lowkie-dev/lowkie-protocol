@@ -1,0 +1,9 @@
+.anchor
+target/
+node_modules/
+.env
+build/
+**/*.rs.bk
+test-ledger/
+/tmp/lowkie-*.json
+TECHNICAL_SPEC.md

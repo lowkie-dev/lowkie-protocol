@@ -1,0 +1,33 @@
+{
+  "name": "lowkie-pool",
+  "version": "1.0.0",
+  "scripts": {
+    "test": "ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts",
+    "typecheck": "tsc --noEmit",
+    "ci:check": "yarn -s typecheck",
+    "local:validate": "ts-node scripts/local-validate.ts",
+    "bootstrap:program": "ts-node scripts/bootstrap-program.ts",
+    "frontend": "ts-node scripts/frontend-server.ts",
+    "devnet:test": "arcium test --cluster devnet",
+    "send": "ts-node client/send.ts",
+    "relay": "ts-node client/relayer.ts"
+  },
+  "dependencies": {
+    "@arcium-hq/client": "^0.9.5",
+    "@coral-xyz/anchor": "^0.32.0",
+    "@solana/web3.js": "^1.95.3",
+    "bs58": "^6.0.0",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "@types/chai": "^4.3.12",
+    "@types/mocha": "^10.0.6",
+    "@types/node": "^20.12.7",
+    "chai": "^4.4.1",
+    "mocha": "^10.4.0",
+    "ts-mocha": "^10.0.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.5"
+  },
+  "packageManager": "yarn@1.22.22+sha512.a6b2f7906b721bba3d67d4aff083df04dad64c399707841b7acf00f6b133b7ac24255f2652fa22ae3534329dc6180534e98d17432037ff6fd140556e2bb3137e"
+}

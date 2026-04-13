@@ -1,0 +1,5 @@
+offset = 757172409
+
+[solana]
+endpoint_rpc = "http://host.docker.internal:8899"
+endpoint_wss = "ws://host.docker.internal:8900"

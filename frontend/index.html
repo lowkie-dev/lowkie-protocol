@@ -1,0 +1,458 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Lowkie — Private Transfers on Solana</title>
+    <meta
+      name="description"
+      content="Lowkie is a privacy-preserving SOL transfer protocol on Solana using Arcium MPC. Withdrawal amounts and recipients are invisible to block explorers."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="noise-overlay"></div>
+
+    <!-- ── Navigation ──────────────────────────────────────────────── -->
+    <nav class="nav" id="nav">
+      <div class="nav-brand">
+        <div class="logo-icon">
+          <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+            <circle
+              cx="14"
+              cy="14"
+              r="12"
+              stroke="url(#grad)"
+              stroke-width="2.5"
+              fill="none"
+            />
+            <circle cx="14" cy="14" r="6" fill="url(#grad)" opacity="0.6" />
+            <circle cx="14" cy="14" r="2.5" fill="white" />
+            <defs>
+              <linearGradient id="grad" x1="0" y1="0" x2="28" y2="28">
+                <stop offset="0%" stop-color="#a78bfa" />
+                <stop offset="100%" stop-color="#06b6d4" />
+              </linearGradient>
+            </defs>
+          </svg>
+        </div>
+        <span class="nav-title">lowkie</span>
+      </div>
+      <div class="nav-links">
+        <a href="#privacy" class="nav-link">Privacy</a>
+        <a href="#how-it-works" class="nav-link">How It Works</a>
+        <a href="#transfer" class="nav-link">Transfer</a>
+        <a href="https://github.com" class="nav-link external" target="_blank"
+          >GitHub ↗</a
+        >
+      </div>
+    </nav>
+
+    <main>
+      <!-- ── Hero ──────────────────────────────────────────────────── -->
+      <section class="hero" id="hero">
+        <div class="hero-badge">
+          <span class="badge-dot"></span>
+          Powered by Arcium MPC
+        </div>
+        <h1 class="hero-title">
+          Private transfers.<br />
+          <span class="gradient-text">Zero leakage.</span>
+        </h1>
+        <p class="hero-sub">
+          The first Solana protocol where withdrawal amounts, recipients, and
+          deposit-withdraw links are all invisible to block explorers.
+        </p>
+        <div class="hero-cta">
+          <a href="#transfer" class="btn btn-primary">Start Transfer</a>
+          <a href="#privacy" class="btn btn-ghost">See the Proof</a>
+        </div>
+
+        <div class="hero-stats">
+          <div class="stat">
+            <span class="stat-value">0</span>
+            <span class="stat-label">Inner CPI Logs</span>
+          </div>
+          <div class="stat">
+            <span class="stat-value">Enc</span>
+            <span class="stat-label">On-chain Amounts</span>
+          </div>
+          <div class="stat">
+            <span class="stat-value">SHA256</span>
+            <span class="stat-label">Recipient Hidden</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── Privacy Comparison ────────────────────────────────────── -->
+      <section class="section" id="privacy">
+        <div class="section-header">
+          <span class="section-tag">Privacy Proof</span>
+          <h2>What Block Explorers See</h2>
+          <p>Side-by-side comparison of a normal SOL transfer vs. Lowkie.</p>
+        </div>
+
+        <div class="comparison-grid">
+          <!-- Normal Transfer -->
+          <div class="comparison-card danger">
+            <div class="card-header">
+              <span class="card-icon">⚠️</span>
+              <h3>Normal SOL Transfer</h3>
+              <span class="card-badge badge-danger">Everything Visible</span>
+            </div>
+            <div class="explorer-mock">
+              <div class="explorer-row">
+                <span class="explorer-label">From</span>
+                <span class="explorer-value pubkey">7xKp...a3F9</span>
+              </div>
+              <div class="explorer-row">
+                <span class="explorer-label">To</span>
+                <span class="explorer-value pubkey">Bn4x...k8R2</span>
+              </div>
+              <div class="explorer-row highlight-danger">
+                <span class="explorer-label">Amount</span>
+                <span class="explorer-value amount">◎ 3.700000000</span>
+              </div>
+              <div class="explorer-row">
+                <span class="explorer-label">Inner Ix</span>
+                <span class="explorer-value">System Transfer 3.7 SOL</span>
+              </div>
+              <div class="explorer-row">
+                <span class="explorer-label">Log</span>
+                <span class="explorer-value log-danger"
+                  >Transfer: 3700000000 lamports</span
+                >
+              </div>
+            </div>
+            <div class="verdict verdict-bad">
+              <span>📊 Fully Traceable</span>
+            </div>
+          </div>
+
+          <!-- Lowkie Transfer -->
+          <div class="comparison-card safe">
+            <div class="card-header">
+              <h3>Lowkie Transfer</h3>
+              <span class="card-badge badge-safe">Privacy Protected</span>
+              <span class="card-icon">🔒</span>
+            </div>
+            <div class="explorer-mock">
+              <div class="explorer-row">
+                <span class="explorer-label">From</span>
+                <span class="explorer-value pubkey"
+                  >9mTq...x2L7 <span class="tag-relayer">Relayer</span></span
+                >
+              </div>
+              <div class="explorer-row">
+                <span class="explorer-label">To</span>
+                <span class="explorer-value encrypted"
+                  >████████████ <span class="tag-hidden">Hash Only</span></span
+                >
+              </div>
+              <div class="explorer-row highlight-safe">
+                <span class="explorer-label">Amount</span>
+                <span class="explorer-value encrypted">████████████</span>
+              </div>
+              <div class="explorer-row">
+                <span class="explorer-label">Inner Ix</span>
+                <span class="explorer-value safe-text"
+                  >None (direct lamport manipulation)</span
+                >
+              </div>
+              <div class="explorer-row">
+                <span class="explorer-label">On-chain</span>
+                <span class="explorer-value encrypted"
+                  >Enc&lt;Mxe, u64&gt; ciphertext</span
+                >
+              </div>
+            </div>
+            <div class="verdict verdict-good">
+              <span>🛡️ Amount + Recipient Hidden</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Feature Matrix -->
+        <div class="feature-matrix">
+          <table>
+            <thead>
+              <tr>
+                <th>Privacy Feature</th>
+                <th>Normal Transfer</th>
+                <th>Tornado-style</th>
+                <th class="highlight-col">Lowkie</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Withdraw amount hidden</td>
+                <td><span class="x">✗</span></td>
+                <td><span class="check">✓</span> Fixed denom</td>
+                <td class="highlight-col">
+                  <span class="check">✓</span> No CPI log
+                </td>
+              </tr>
+              <tr>
+                <td>Recipient hidden at deposit</td>
+                <td><span class="x">✗</span></td>
+                <td><span class="x">✗</span></td>
+                <td class="highlight-col">
+                  <span class="check">✓</span> SHA256 hash
+                </td>
+              </tr>
+              <tr>
+                <td>Deposit↔Withdraw unlinkable</td>
+                <td><span class="x">✗</span></td>
+                <td><span class="check">✓</span></td>
+                <td class="highlight-col">
+                  <span class="check">✓</span> Separate signer
+                </td>
+              </tr>
+              <tr>
+                <td>Amount decorrelation</td>
+                <td><span class="x">✗</span></td>
+                <td><span class="check">✓</span> Fixed denom</td>
+                <td class="highlight-col">
+                  <span class="check">✓</span> Fixed pool tiers
+                </td>
+              </tr>
+              <tr>
+                <td>On-chain state encrypted</td>
+                <td><span class="x">✗</span></td>
+                <td>Partial</td>
+                <td class="highlight-col">
+                  <span class="check">✓</span> Enc&lt;Mxe&gt;
+                </td>
+              </tr>
+              <tr>
+                <td>Regulatory compliant</td>
+                <td>N/A</td>
+                <td><span class="x">✗</span></td>
+                <td class="highlight-col">
+                  <span class="check">✓</span> MPC auditable
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ── How It Works ─────────────────────────────────────────── -->
+      <section class="section" id="how-it-works">
+        <div class="section-header">
+          <span class="section-tag">Architecture</span>
+          <h2>How Lowkie Works</h2>
+          <p>Five privacy layers working together.</p>
+        </div>
+
+        <div class="steps-grid">
+          <div class="step-card">
+            <div class="step-num">01</div>
+            <h3>Denomination Routing</h3>
+            <p>
+              Your deposit is decomposed into fixed 1.0, 0.1, and 0.01 SOL
+              notes, then routed into matching pool tiers to reduce amount
+              correlation.
+            </p>
+            <div class="step-tag">Client-Side</div>
+          </div>
+          <div class="step-card">
+            <div class="step-num">02</div>
+            <h3>Recipient Encryption</h3>
+            <p>
+              Recipient stored as SHA256(secret ∥ pubkey). The actual recipient
+              is invisible on-chain until withdrawal.
+            </p>
+            <div class="step-tag">On-Chain</div>
+          </div>
+          <div class="step-card">
+            <div class="step-num">03</div>
+            <h3>MPC Encryption</h3>
+            <p>
+              Arcium's multi-party computation encrypts pool balances and note
+              amounts. No single node ever sees plaintext.
+            </p>
+            <div class="step-tag">Arcium MXE</div>
+          </div>
+          <div class="step-card">
+            <div class="step-num">04</div>
+            <h3>Relayer Unlinkability</h3>
+            <p>
+              Withdrawal uses a different keypair than deposit with randomised
+              timing, breaking the on-chain link.
+            </p>
+            <div class="step-tag">Protocol</div>
+          </div>
+          <div class="step-card featured">
+            <div class="step-num">05</div>
+            <h3>Silent Withdrawal</h3>
+            <p>
+              Direct lamport manipulation from program-owned PDA. Zero inner
+              instruction logs. Block explorers show nothing.
+            </p>
+            <div class="step-tag">On-Chain</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── Transfer Form ─────────────────────────────────────────── -->
+      <section class="section" id="transfer">
+        <div class="section-header">
+          <span class="section-tag">Demo</span>
+          <h2>Send Through Lowkie</h2>
+          <p>Queue a private deposit + relayed withdrawal.</p>
+        </div>
+
+        <div class="transfer-layout">
+          <div class="transfer-card glass">
+            <form id="deposit-form">
+              <div class="form-group">
+                <label for="recipient-input">Recipient Address</label>
+                <input
+                  id="recipient-input"
+                  type="text"
+                  placeholder="Enter Solana pubkey..."
+                  required
+                  spellcheck="false"
+                  autocomplete="off"
+                />
+              </div>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="amount-input">Amount (SOL)</label>
+                  <input
+                    id="amount-input"
+                    type="number"
+                    min="0.001"
+                    step="0.001"
+                    value="0.1"
+                    required
+                  />
+                </div>
+                <div class="form-group">
+                  <label>Supported Pools</label>
+                  <div class="form-note">1.0 SOL, 0.1 SOL, 0.01 SOL</div>
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label for="delay-input">Relayer Delay (seconds)</label>
+                <input
+                  id="delay-input"
+                  type="range"
+                  min="5"
+                  max="120"
+                  value="15"
+                />
+                <div class="range-labels">
+                  <span>5s</span>
+                  <span id="delay-value">15s</span>
+                  <span>120s</span>
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                class="btn btn-primary btn-full"
+                id="submit-btn"
+              >
+                <span class="btn-text">🔒 Send Through Lowkie</span>
+                <span class="btn-loading" hidden>
+                  <span class="spinner"></span>
+                  Processing...
+                </span>
+              </button>
+            </form>
+          </div>
+
+          <div class="status-panel glass">
+            <h3>Transaction Status</h3>
+            <div class="status-steps" id="status-steps">
+              <div class="status-step" id="step-split">
+                <div class="step-indicator pending"></div>
+                <div class="step-content">
+                  <span class="step-title">Denomination Routing</span>
+                  <span class="step-desc"
+                    >Decomposing amount into fixed denomination notes</span
+                  >
+                </div>
+              </div>
+              <div class="status-step" id="step-encrypt">
+                <div class="step-indicator pending"></div>
+                <div class="step-content">
+                  <span class="step-title">Encrypt & Deposit</span>
+                  <span class="step-desc"
+                    >Encrypting amounts for MPC + depositing to vault</span
+                  >
+                </div>
+              </div>
+              <div class="status-step" id="step-mpc">
+                <div class="step-indicator pending"></div>
+                <div class="step-content">
+                  <span class="step-title">MPC Computation</span>
+                  <span class="step-desc"
+                    >Arcium cluster processing encrypted state</span
+                  >
+                </div>
+              </div>
+              <div class="status-step" id="step-relay">
+                <div class="step-indicator pending"></div>
+                <div class="step-content">
+                  <span class="step-title">Relayer Withdrawal</span>
+                  <span class="step-desc"
+                    >Different signer + random delay for unlinkability</span
+                  >
+                </div>
+              </div>
+              <div class="status-step" id="step-done">
+                <div class="step-indicator pending"></div>
+                <div class="step-content">
+                  <span class="step-title">Complete</span>
+                  <span class="step-desc"
+                    >SOL delivered — no trace on explorer</span
+                  >
+                </div>
+              </div>
+            </div>
+
+            <div class="log-output" id="log-output">
+              <div id="log" class="log-lines">
+                <div class="log-line">Ready. Connect backend to begin.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── Backend Health ────────────────────────────────────────── -->
+      <section class="section" id="health-section">
+        <div class="health-card glass">
+          <h3>🔌 Backend Status</h3>
+          <pre id="health">Checking connection...</pre>
+        </div>
+      </section>
+    </main>
+
+    <!-- ── Footer ──────────────────────────────────────────────────── -->
+    <footer class="footer">
+      <div class="footer-content">
+        <div class="footer-brand">
+          <span class="nav-title">lowkie</span>
+          <p>Privacy-preserving SOL transfers on Solana.</p>
+        </div>
+        <div class="footer-links">
+          <span>Built with Arcium MPC • Anchor • Solana</span>
+        </div>
+      </div>
+    </footer>
+
+    <script src="./app.js" defer></script>
+  </body>
+</html>
