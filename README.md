@@ -25,6 +25,8 @@ Works on **localnet**, **devnet** (cluster offset 456), and **mainnet-alpha** (c
 
 For the detailed protocol architecture and execution flow, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
+For repository workflow and branch naming, see [CONTRIBUTING.md](./CONTRIBUTING.md).
+
 ---
 
 ## 1. What this is
