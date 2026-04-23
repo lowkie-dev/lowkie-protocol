@@ -157,7 +157,7 @@ Operator runs: yarn bootstrap:program
                          ├─ 3. Register withdraw_from_pool comp-def on-chain
                          ├─ 4. Register compact_registry comp-def on-chain
                          │
-                         └─ For each denomination (1 SOL / 0.1 SOL / 0.01 SOL):
+                         └─ For each denomination (1 SOL / 0.5 SOL / 0.1 SOL / 0.05 SOL / 0.01 SOL):
                               ├─ 5. init_pool instruction
                               │      ├─ Creates PoolState PDA  [pool, denom_le_bytes]
                               │      ├─ Creates VaultAccount PDA [vault, denom_le_bytes]
@@ -180,7 +180,7 @@ POST /api/send
                        ↓ if clean
                    2. Acquire serial mutex ──► 3. decomposeIntoDenominations()
                                                    e.g. 1.11 SOL →
-                                                   [1 SOL, 0.1 SOL, 0.01 SOL]
+                                                   [1 SOL, 0.5 SOL, 0.1 SOL, 0.05 SOL, 0.01 SOL]
                                                    (shuffled, random order)
                                                    ↓
                                                For each sub-note:
@@ -495,7 +495,9 @@ Single source of truth for all shared values. Key constants:
 ```typescript
 export const SUPPORTED_DENOMINATION_LAMPORTS = [
   1_000_000_000n, // 1.0 SOL
+  500_000_000n, // 0.5 SOL
   100_000_000n, // 0.1 SOL
+  50_000_000n, // 0.05 SOL
   10_000_000n, // 0.01 SOL
 ] as const;
 
@@ -531,7 +533,7 @@ number of fixed-denomination notes, then shuffles the result:
 
 ```
 Input:  amountLamports = 1_110_000_000n  (1.11 SOL)
-        denominations  = [1e9, 1e8, 1e7]
+  denominations  = [1e9, 5e8, 1e8, 5e7, 1e7]
 
 Step 1: 1_110_000_000 ÷ 1_000_000_000 = 1 note  → remaining 110_000_000
 Step 2:   110_000_000 ÷   100_000_000 = 1 note  → remaining  10_000_000
@@ -636,21 +638,21 @@ The **withdraw** instruction contains **NO plaintext amount** anywhere:
 
 ## Denomination & Note Splitting
 
-Three independent denomination pools operate in parallel. The client's greedy
+Five independent denomination pools operate in parallel. The client's greedy
 decomposition ensures that any SOL amount expressible in multiples of 0.01 SOL can
 be sent in at most one pass:
 
 ```
-Denominations: [1 SOL,  0.1 SOL,  0.01 SOL]
+Denominations: [1 SOL,  0.5 SOL,  0.1 SOL,  0.05 SOL,  0.01 SOL]
 
 Examples:
   0.01 SOL → [0.01]
   0.11 SOL → [0.1, 0.01]          (shuffled: [0.01, 0.1])
+  0.55 SOL → [0.5, 0.05]          (shuffled: [0.05, 0.5])
   1.11 SOL → [1, 0.1, 0.01]       (shuffled: [0.1, 1, 0.01])
   3.37 SOL → [1, 1, 1, 0.1, 0.1,
-              0.1, 0.01, 0.01,
-              0.01, 0.01, 0.01,
-              0.01, 0.01]
+              0.1, 0.05, 0.01,
+              0.01]
 ```
 
 Each sub-note produces:

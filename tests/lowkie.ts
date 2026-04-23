@@ -32,14 +32,17 @@ import os from "node:os";
 import { expect } from "chai";
 import {
   buildArciumQueueAccounts,
+  deriveNullifierRecordPda,
   deriveNullifierRegistryPda,
   derivePoolPda,
+  deriveProtocolConfigPda,
   deriveVaultPda,
-} from "../client/arciumAccounts";
+} from "../apps/backend/src/core/arciumAccounts";
+import { decomposeIntoDenominations } from "../apps/backend/src/core/utils";
 import {
   resolveClusterOffset,
   SUPPORTED_DENOMINATION_LAMPORTS,
-} from "../client/constants";
+} from "../apps/backend/src/core/constants";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -74,6 +77,13 @@ function recipientHash(withdrawKey: Uint8Array, recipient: PublicKey): Buffer {
   return createHash("sha256")
     .update(withdrawKey)
     .update(recipient.toBuffer())
+    .digest();
+}
+
+function publicNullifierHash(secret: Uint8Array): Buffer {
+  return createHash("sha256")
+    .update("lowkie:nullifier:v1")
+    .update(secret)
     .digest();
 }
 
@@ -176,10 +186,17 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
   const relayer = Keypair.generate();
   const recipient = Keypair.generate();
 
-  const primaryDenominationLamports = SUPPORTED_DENOMINATION_LAMPORTS[1];
-  const secondaryDenominationLamports = SUPPORTED_DENOMINATION_LAMPORTS[2];
+  const primaryDenominationLamports = 100_000_000n;
+  const secondaryDenominationLamports =
+    SUPPORTED_DENOMINATION_LAMPORTS[SUPPORTED_DENOMINATION_LAMPORTS.length - 1];
+  if (!SUPPORTED_DENOMINATION_LAMPORTS.includes(primaryDenominationLamports)) {
+    throw new Error(
+      "tests/lowkie.ts expects 0.1 SOL to remain a supported denomination",
+    );
+  }
   const poolPDA = derivePoolPda(programId, primaryDenominationLamports);
   const vaultPDA = deriveVaultPda(programId, primaryDenominationLamports);
+  const protocolConfigPDA = deriveProtocolConfigPda(programId);
   const nullifierRegistryPDA = deriveNullifierRegistryPda(
     programId,
     primaryDenominationLamports,
@@ -189,6 +206,7 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
   let withdrawKey: Uint8Array;
   let hash: Buffer;
   let recpHash: Buffer;
+  let mainNullifierHash: Buffer;
   let amountLamports: bigint;
 
   /** Split a 32-byte secret into two u128 limbs (little-endian). */
@@ -306,6 +324,7 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
       .compactRegistry(offset, new anchor.BN(denominationLamports.toString()))
       .accountsPartial({
         relayer: relayer.publicKey,
+        protocolConfig: protocolConfigPDA,
         poolState: denominationPoolPDA,
         nullifierRegistry: denominationNullifierRegistryPDA,
         ...arciumAccs(offset, cdOffset("compact_registry")),
@@ -322,7 +341,44 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
     console.log("    ✅ Nullifier registry compacted");
   }
 
+  async function ensureProtocolConfig() {
+    try {
+      const existing = await (program.account as any).protocolConfig.fetch(
+        protocolConfigPDA,
+      );
+
+      if (!new PublicKey(existing.admin).equals(payer.publicKey)) {
+        return;
+      }
+
+      if (
+        !new PublicKey(existing.maintenanceAuthority).equals(relayer.publicKey)
+      ) {
+        const methods = program.methods as any;
+        await methods
+          .updateProtocolConfig(null, relayer.publicKey)
+          .accounts({
+            admin: payer.publicKey,
+            protocolConfig: protocolConfigPDA,
+          })
+          .rpc({ commitment: "confirmed" });
+      }
+      return;
+    } catch {
+      const methods = program.methods as any;
+      await methods
+        .initializeProtocolConfig(relayer.publicKey)
+        .accounts({
+          payer: payer.publicKey,
+          protocolConfig: protocolConfigPDA,
+          systemProgram: SystemProgram.programId,
+        })
+        .rpc({ commitment: "confirmed" });
+    }
+  }
+
   before("Fund relayer + recipient", async () => {
+    await ensureProtocolConfig();
     await getMXEKey(provider, programId);
 
     for (const [kp, sol] of [
@@ -375,6 +431,7 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
           [method](null, null)
           .accounts({
             payer: payer.publicKey,
+            protocolConfig: protocolConfigPDA,
             mxeAccount,
             compDefAccount,
             addressLookupTable,
@@ -427,9 +484,14 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
     amountLamports = primaryDenominationLamports;
     noteSecret = new Uint8Array(randomBytes(32));
     withdrawKey = new Uint8Array(randomBytes(32));
+    mainNullifierHash = publicNullifierHash(noteSecret);
     recpHash = recipientHash(withdrawKey, recipient.publicKey);
     hash = noteHash(noteSecret, recipient.publicKey, amountLamports);
     const notePDA = pda([Buffer.from("note"), hash], programId);
+    const nullifierRecordPDA = deriveNullifierRecordPda(
+      programId,
+      mainNullifierHash,
+    );
 
     const mxeKey = await getMXEKey(provider, programId);
     const priv = x25519.utils.randomSecretKey();
@@ -464,6 +526,7 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
         nonceSecLoB,
         nonceSecHiB,
         Array.from(recpHash),
+        Array.from(mainNullifierHash),
         new anchor.BN(amountLamports.toString()),
         Array.from(hash),
       )
@@ -471,6 +534,7 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
         sender: payer.publicKey,
         poolState: poolPDA,
         noteRegistry: notePDA,
+        nullifierRecord: nullifierRecordPDA,
         vault: vaultPDA,
         ...arciumAccs(offset, cdOffset("deposit_to_pool")),
       })
@@ -518,6 +582,10 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
   it("3: withdraw — relayer encrypts secret for MPC, recipient verified via withdraw_key, SOL delivered", async () => {
     await new Promise((r) => setTimeout(r, 5000));
     const notePDA = pda([Buffer.from("note"), hash], programId);
+    const nullifierRecordPDA = deriveNullifierRecordPda(
+      programId,
+      mainNullifierHash,
+    );
     const offset = new anchor.BN(randomBytes(8), "hex");
     const balBefore = await provider.connection.getBalance(recipient.publicKey);
 
@@ -547,6 +615,7 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
       .accountsPartial({
         relayer: relayer.publicKey,
         noteRegistry: notePDA,
+        nullifierRecord: nullifierRecordPDA,
         poolState: poolPDA,
         vault: vaultPDA,
         nullifierRegistry: nullifierRegistryPDA,
@@ -602,6 +671,10 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
 
   it("4: Rejects double-spend", async () => {
     const notePDA = pda([Buffer.from("note"), hash], programId);
+    const nullifierRecordPDA = deriveNullifierRecordPda(
+      programId,
+      mainNullifierHash,
+    );
     const noteBefore = await provider.connection.getAccountInfo(
       notePDA,
       "confirmed",
@@ -636,6 +709,7 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
         .accountsPartial({
           relayer: relayer.publicKey,
           noteRegistry: notePDA,
+          nullifierRecord: nullifierRecordPDA,
           poolState: poolPDA,
           vault: vaultPDA,
           nullifierRegistry: nullifierRegistryPDA,
@@ -672,6 +746,10 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
 
   it("5: Rejects note recreation after closure when nullifier already spent", async () => {
     const notePDA = pda([Buffer.from("note"), hash], programId);
+    const nullifierRecordPDA = deriveNullifierRecordPda(
+      programId,
+      mainNullifierHash,
+    );
 
     const mxeKey = await getMXEKey(provider, programId);
     const priv = x25519.utils.randomSecretKey();
@@ -694,94 +772,48 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
 
     const depositOffset = new anchor.BN(randomBytes(8), "hex");
 
-    await program.methods
-      .deposit(
-        depositOffset,
-        Array.from(ct[0]),
-        Array.from(pub),
-        nonceBN,
-        Array.from(ctSecLo[0]),
-        Array.from(ctSecHi[0]),
-        nonceSecLoB,
-        nonceSecHiB,
-        Array.from(recpHash),
-        new anchor.BN(amountLamports.toString()),
-        Array.from(hash),
-      )
-      .accountsPartial({
-        sender: payer.publicKey,
-        poolState: poolPDA,
-        noteRegistry: notePDA,
-        vault: vaultPDA,
-        ...arciumAccs(depositOffset, cdOffset("deposit_to_pool")),
-      })
-      .rpc({ skipPreflight: true, commitment: "confirmed" });
+    try {
+      await program.methods
+        .deposit(
+          depositOffset,
+          Array.from(ct[0]),
+          Array.from(pub),
+          nonceBN,
+          Array.from(ctSecLo[0]),
+          Array.from(ctSecHi[0]),
+          nonceSecLoB,
+          nonceSecHiB,
+          Array.from(recpHash),
+          Array.from(mainNullifierHash),
+          new anchor.BN(amountLamports.toString()),
+          Array.from(hash),
+        )
+        .accountsPartial({
+          sender: payer.publicKey,
+          poolState: poolPDA,
+          noteRegistry: notePDA,
+          nullifierRecord: nullifierRecordPDA,
+          vault: vaultPDA,
+          ...arciumAccs(depositOffset, cdOffset("deposit_to_pool")),
+        })
+        .rpc({ commitment: "confirmed" });
+      expect.fail("Replay deposit should have been rejected");
+    } catch (e: unknown) {
+      const message = (e as Error).message;
+      expect(
+        message.includes("NullifierAlreadySpent") ||
+          message.includes("custom program error") ||
+          message.includes("Unknown action"),
+      ).to.be.true;
+    }
 
-    await awaitComputationFinalization(
-      provider,
-      depositOffset,
-      programId,
+    const replayedNote = await provider.connection.getAccountInfo(
+      notePDA,
       "confirmed",
     );
-    await waitForNoteStatus(program, notePDA, "ready");
-
-    // Encrypt claimed secret for withdraw
-    const priv2 = x25519.utils.randomSecretKey();
-    const pub2 = x25519.getPublicKey(priv2);
-    const cipher2 = new RescueCipher(x25519.getSharedSecret(priv2, mxeKey));
-    const wNonceLo = randomBytes(16);
-    const wCtLo = cipher2.encrypt([secretLo], wNonceLo);
-    const wNonceLoB = new anchor.BN(deserializeLE(wNonceLo).toString());
-    const wNonceHi = randomBytes(16);
-    const wCtHi = cipher2.encrypt([secretHi], wNonceHi);
-    const wNonceHiB = new anchor.BN(deserializeLE(wNonceHi).toString());
-
-    const withdrawOffset = new anchor.BN(randomBytes(8), "hex");
-    const recipientBalanceBefore = await provider.connection.getBalance(
-      recipient.publicKey,
-    );
-
-    await program.methods
-      .withdraw(
-        withdrawOffset,
-        Array.from(withdrawKey),
-        Array.from(wCtLo[0]),
-        Array.from(wCtHi[0]),
-        Array.from(pub2),
-        wNonceLoB,
-        wNonceHiB,
-      )
-      .accountsPartial({
-        relayer: relayer.publicKey,
-        noteRegistry: notePDA,
-        poolState: poolPDA,
-        vault: vaultPDA,
-        nullifierRegistry: nullifierRegistryPDA,
-        recipient: recipient.publicKey,
-        ...arciumAccs(withdrawOffset, cdOffset("withdraw_from_pool")),
-      })
-      .signers([relayer])
-      .rpc({ skipPreflight: true, commitment: "confirmed" });
-
-    await awaitComputationFinalization(
-      provider,
-      withdrawOffset,
-      programId,
-      "confirmed",
-    );
-
-    const failedNote = await waitForNoteStatus(program, notePDA, "failed");
-    const recipientBalanceAfter = await provider.connection.getBalance(
-      recipient.publicKey,
-    );
-
-    expect(failedNote.status).to.deep.equal({ failed: {} });
-    expect(recipientBalanceAfter - recipientBalanceBefore).to.equal(0);
-    expect(BigInt(failedNote.lamportsForTransfer.toString())).to.equal(
-      amountLamports,
-    );
+    expect(replayedNote).to.equal(null);
     console.log(
-      "    ✅ Encrypted nullifier registry blocks replay after note-account closure",
+      "    ✅ Spent nullifier blocks note recreation before a replay deposit can succeed",
     );
   });
 
@@ -798,9 +830,14 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
     const testAmount = secondaryDenominationLamports;
     const testSecret = new Uint8Array(randomBytes(32));
     const testWithdrawKey = new Uint8Array(randomBytes(32));
+    const testNullifierHash = publicNullifierHash(testSecret);
     const testRecpHash = recipientHash(testWithdrawKey, recipient.publicKey);
     const testNoteHash = noteHash(testSecret, recipient.publicKey, testAmount);
     const testNotePDA = pda([Buffer.from("note"), testNoteHash], programId);
+    const testNullifierRecordPDA = deriveNullifierRecordPda(
+      programId,
+      testNullifierHash,
+    );
 
     const mxeKey = await getMXEKey(provider, programId);
     const priv = x25519.utils.randomSecretKey();
@@ -834,6 +871,7 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
         tNonceSecLoB,
         tNonceSecHiB,
         Array.from(testRecpHash),
+        Array.from(testNullifierHash),
         new anchor.BN(testAmount.toString()),
         Array.from(testNoteHash),
       )
@@ -841,6 +879,7 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
         sender: payer.publicKey,
         poolState: secondaryPoolPDA,
         noteRegistry: testNotePDA,
+        nullifierRecord: testNullifierRecordPDA,
         vault: secondaryVaultPDA,
         ...arciumAccs(offset, cdOffset("deposit_to_pool")),
       })
@@ -894,6 +933,7 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
         .accountsPartial({
           relayer: relayer.publicKey,
           noteRegistry: testNotePDA,
+          nullifierRecord: testNullifierRecordPDA,
           poolState: secondaryPoolPDA,
           vault: secondaryVaultPDA,
           nullifierRegistry: secondaryNullifierRegistryPDA,
@@ -1077,6 +1117,17 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
       expect(uniq.size).to.equal(SUPPORTED_DENOMINATION_LAMPORTS.length);
       console.log("    ✅ All denominations distinct and positive");
     });
+
+    it("U7: denomination decomposition prefers the new intermediate pools", () => {
+      const notes = decomposeIntoDenominations(550_000_000n).sort(
+        (left, right) => Number(right - left),
+      );
+
+      expect(notes).to.deep.equal([500_000_000n, 50_000_000n]);
+      console.log(
+        "    ✅ 0.55 SOL now routes through 0.5 SOL and 0.05 SOL pools",
+      );
+    });
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -1089,6 +1140,7 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
     // Make a fresh deposit
     const testSecret = new Uint8Array(randomBytes(32));
     const testWithdrawKey = new Uint8Array(randomBytes(32));
+    const testNullifierHash = publicNullifierHash(testSecret);
     const testRecpHash = recipientHash(testWithdrawKey, recipient.publicKey);
     const testNoteHash = noteHash(
       testSecret,
@@ -1096,6 +1148,10 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
       primaryDenominationLamports,
     );
     const testNotePDA = pda([Buffer.from("note"), testNoteHash], programId);
+    const testNullifierRecordPDA = deriveNullifierRecordPda(
+      programId,
+      testNullifierHash,
+    );
 
     const mxeKey = await getMXEKey(provider, programId);
     const priv = x25519.utils.randomSecretKey();
@@ -1127,6 +1183,7 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
         nonceSecLoB,
         nonceSecHiB,
         Array.from(testRecpHash),
+        Array.from(testNullifierHash),
         new anchor.BN(primaryDenominationLamports.toString()),
         Array.from(testNoteHash),
       )
@@ -1134,6 +1191,7 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
         sender: payer.publicKey,
         poolState: poolPDA,
         noteRegistry: testNotePDA,
+        nullifierRecord: testNullifierRecordPDA,
         vault: vaultPDA,
         ...arciumAccs(depositOffset, cdOffset("deposit_to_pool")),
       })
@@ -1183,6 +1241,7 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
       .accountsPartial({
         relayer: relayer.publicKey,
         noteRegistry: testNotePDA,
+        nullifierRecord: testNullifierRecordPDA,
         poolState: poolPDA,
         vault: vaultPDA,
         nullifierRegistry: nullifierRegistryPDA,
@@ -1239,6 +1298,7 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
       .accountsPartial({
         relayer: relayer.publicKey,
         noteRegistry: testNotePDA,
+        nullifierRecord: testNullifierRecordPDA,
         poolState: poolPDA,
         vault: vaultPDA,
         nullifierRegistry: nullifierRegistryPDA,
@@ -1278,6 +1338,7 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
     // Create a fresh deposit (note will be in Ready state after callback)
     const testSecret = new Uint8Array(randomBytes(32));
     const testWithdrawKey = new Uint8Array(randomBytes(32));
+    const testNullifierHash = publicNullifierHash(testSecret);
     const testRecpHash = recipientHash(testWithdrawKey, recipient.publicKey);
     const testNoteHash = noteHash(
       testSecret,
@@ -1285,6 +1346,10 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
       primaryDenominationLamports,
     );
     const testNotePDA = pda([Buffer.from("note"), testNoteHash], programId);
+    const testNullifierRecordPDA = deriveNullifierRecordPda(
+      programId,
+      testNullifierHash,
+    );
 
     const mxeKey = await getMXEKey(provider, programId);
     const priv = x25519.utils.randomSecretKey();
@@ -1316,6 +1381,7 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
         nonceSecLoB,
         nonceSecHiB,
         Array.from(testRecpHash),
+        Array.from(testNullifierHash),
         new anchor.BN(primaryDenominationLamports.toString()),
         Array.from(testNoteHash),
       )
@@ -1323,6 +1389,7 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
         sender: payer.publicKey,
         poolState: poolPDA,
         noteRegistry: testNotePDA,
+        nullifierRecord: testNullifierRecordPDA,
         vault: vaultPDA,
         ...arciumAccs(offset, cdOffset("deposit_to_pool")),
       })
@@ -1357,7 +1424,10 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
   // ── 9. Full end-to-end cycle on a different denomination ──────────────────
 
   it("9: Full deposit→withdraw→compact cycle on the smallest denomination", async () => {
-    const smallDenom = SUPPORTED_DENOMINATION_LAMPORTS[2]; // 10_000_000 (0.01 SOL)
+    const smallDenom =
+      SUPPORTED_DENOMINATION_LAMPORTS[
+        SUPPORTED_DENOMINATION_LAMPORTS.length - 1
+      ];
     const {
       poolPDA: sPoolPDA,
       vaultPDA: sVaultPDA,
@@ -1366,6 +1436,7 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
 
     const testSecret = new Uint8Array(randomBytes(32));
     const testWithdrawKey = new Uint8Array(randomBytes(32));
+    const testNullifierHash = publicNullifierHash(testSecret);
     const testRecipient = Keypair.generate();
     const testRecpHash = recipientHash(
       testWithdrawKey,
@@ -1377,6 +1448,10 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
       smallDenom,
     );
     const testNotePDA = pda([Buffer.from("note"), testNoteHash], programId);
+    const testNullifierRecordPDA = deriveNullifierRecordPda(
+      programId,
+      testNullifierHash,
+    );
 
     // Fund the test recipient so it has a lamports account
     const sig = await provider.connection.requestAirdrop(
@@ -1422,6 +1497,7 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
         sNonceLoB,
         sNonceHiB,
         Array.from(testRecpHash),
+        Array.from(testNullifierHash),
         new anchor.BN(smallDenom.toString()),
         Array.from(testNoteHash),
       )
@@ -1429,6 +1505,7 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
         sender: payer.publicKey,
         poolState: sPoolPDA,
         noteRegistry: testNotePDA,
+        nullifierRecord: testNullifierRecordPDA,
         vault: sVaultPDA,
         ...arciumAccs(depositOffset, cdOffset("deposit_to_pool")),
       })
@@ -1482,6 +1559,7 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
       .accountsPartial({
         relayer: relayer.publicKey,
         noteRegistry: testNotePDA,
+        nullifierRecord: testNullifierRecordPDA,
         poolState: sPoolPDA,
         vault: sVaultPDA,
         nullifierRegistry: sNullRegPDA,
@@ -1547,8 +1625,10 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
 
     const secrets: Uint8Array[] = [];
     const withdrawKeys: Uint8Array[] = [];
+    const nullifierHashes: Buffer[] = [];
     const noteHashes: Buffer[] = [];
     const notePDAs: PublicKey[] = [];
+    const nullifierRecordPDAs: PublicKey[] = [];
     const recipients: Keypair[] = [];
 
     for (let i = 0; i < 2; i++) {
@@ -1574,7 +1654,11 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
           primaryDenominationLamports,
         ),
       );
+      nullifierHashes.push(publicNullifierHash(secrets[i]));
       notePDAs.push(pda([Buffer.from("note"), noteHashes[i]], programId));
+      nullifierRecordPDAs.push(
+        deriveNullifierRecordPda(programId, nullifierHashes[i]),
+      );
     }
 
     const mxeKey = await getMXEKey(provider, programId);
@@ -1614,6 +1698,7 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
           sNonceLoB,
           sNonceHiB,
           Array.from(recpHash),
+          Array.from(nullifierHashes[i]),
           new anchor.BN(primaryDenominationLamports.toString()),
           Array.from(noteHashes[i]),
         )
@@ -1621,6 +1706,7 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
           sender: payer.publicKey,
           poolState: poolPDA,
           noteRegistry: notePDAs[i],
+          nullifierRecord: nullifierRecordPDAs[i],
           vault: vaultPDA,
           ...arciumAccs(offset, cdOffset("deposit_to_pool")),
         })
@@ -1678,6 +1764,7 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
         .accountsPartial({
           relayer: relayer.publicKey,
           noteRegistry: notePDAs[i],
+          nullifierRecord: nullifierRecordPDAs[i],
           poolState: poolPDA,
           vault: vaultPDA,
           nullifierRegistry: nullifierRegistryPDA,
@@ -1729,9 +1816,14 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
   it("11: Deposit with zero amount is rejected", async () => {
     const testSecret = new Uint8Array(randomBytes(32));
     const testWithdrawKey = new Uint8Array(randomBytes(32));
+    const testNullifierHash = publicNullifierHash(testSecret);
     const testRecpHash = recipientHash(testWithdrawKey, recipient.publicKey);
     const testNoteHash = noteHash(testSecret, recipient.publicKey, 0n);
     const testNotePDA = pda([Buffer.from("note"), testNoteHash], programId);
+    const testNullifierRecordPDA = deriveNullifierRecordPda(
+      programId,
+      testNullifierHash,
+    );
 
     const mxeKey = await getMXEKey(provider, programId);
     const priv = x25519.utils.randomSecretKey();
@@ -1763,6 +1855,7 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
           nonceSecLoB,
           nonceSecHiB,
           Array.from(testRecpHash),
+          Array.from(testNullifierHash),
           new anchor.BN(0),
           Array.from(testNoteHash),
         )
@@ -1770,6 +1863,7 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
           sender: payer.publicKey,
           poolState: poolPDA,
           noteRegistry: testNotePDA,
+          nullifierRecord: testNullifierRecordPDA,
           vault: vaultPDA,
           ...arciumAccs(offset, cdOffset("deposit_to_pool")),
         })
@@ -1794,9 +1888,14 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
     const wrongAmount = 500_000_000n;
     const testSecret = new Uint8Array(randomBytes(32));
     const testWKey = new Uint8Array(randomBytes(32));
+    const testNullifierHash = publicNullifierHash(testSecret);
     const testRecpHash = recipientHash(testWKey, recipient.publicKey);
     const testNoteHash = noteHash(testSecret, recipient.publicKey, wrongAmount);
     const testNotePDA = pda([Buffer.from("note"), testNoteHash], programId);
+    const testNullifierRecordPDA = deriveNullifierRecordPda(
+      programId,
+      testNullifierHash,
+    );
 
     const mxeKey = await getMXEKey(provider, programId);
     const priv = x25519.utils.randomSecretKey();
@@ -1828,6 +1927,7 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
           nonceSecLoB,
           nonceSecHiB,
           Array.from(testRecpHash),
+          Array.from(testNullifierHash),
           new anchor.BN(wrongAmount.toString()),
           Array.from(testNoteHash),
         )
@@ -1835,6 +1935,7 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
           sender: payer.publicKey,
           poolState: poolPDA,
           noteRegistry: testNotePDA,
+          nullifierRecord: testNullifierRecordPDA,
           vault: vaultPDA,
           ...arciumAccs(offset, cdOffset("deposit_to_pool")),
         })
@@ -1861,6 +1962,7 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
 
     const testSecret = new Uint8Array(randomBytes(32));
     const testWithdrawKey = new Uint8Array(randomBytes(32));
+    const testNullifierHash = publicNullifierHash(testSecret);
     const testRecipient = Keypair.generate();
     const testRecpHash = recipientHash(
       testWithdrawKey,
@@ -1872,6 +1974,10 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
       primaryDenominationLamports,
     );
     const testNotePDA = pda([Buffer.from("note"), testNoteHash], programId);
+    const testNullifierRecordPDA = deriveNullifierRecordPda(
+      programId,
+      testNullifierHash,
+    );
 
     const sig = await provider.connection.requestAirdrop(
       testRecipient.publicKey,
@@ -1914,6 +2020,7 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
         sNonceLoB,
         sNonceHiB,
         Array.from(testRecpHash),
+        Array.from(testNullifierHash),
         new anchor.BN(primaryDenominationLamports.toString()),
         Array.from(testNoteHash),
       )
@@ -1921,6 +2028,7 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
         sender: payer.publicKey,
         poolState: poolPDA,
         noteRegistry: testNotePDA,
+        nullifierRecord: testNullifierRecordPDA,
         vault: vaultPDA,
         ...arciumAccs(depositOffset, cdOffset("deposit_to_pool")),
       })
@@ -1971,6 +2079,7 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
       .accountsPartial({
         relayer: relayer.publicKey,
         noteRegistry: testNotePDA,
+        nullifierRecord: testNullifierRecordPDA,
         poolState: poolPDA,
         vault: vaultPDA,
         nullifierRegistry: nullifierRegistryPDA,
@@ -2033,6 +2142,8 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
     const secretB = new Uint8Array(randomBytes(32));
     const wKeyA = new Uint8Array(randomBytes(32));
     const wKeyB = new Uint8Array(randomBytes(32));
+    const nullifierHashA = publicNullifierHash(secretA);
+    const nullifierHashB = publicNullifierHash(secretB);
     const recpHashA = recipientHash(wKeyA, recipA.publicKey);
     const recpHashB = recipientHash(wKeyB, recipB.publicKey);
     const noteHashA = noteHash(
@@ -2047,6 +2158,14 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
     );
     const notePDA_A = pda([Buffer.from("note"), noteHashA], programId);
     const notePDA_B = pda([Buffer.from("note"), noteHashB], programId);
+    const nullifierRecordPDA_A = deriveNullifierRecordPda(
+      programId,
+      nullifierHashA,
+    );
+    const nullifierRecordPDA_B = deriveNullifierRecordPda(
+      programId,
+      nullifierHashB,
+    );
 
     const mxeKey = await getMXEKey(provider, programId);
 
@@ -2077,6 +2196,7 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
           new anchor.BN(deserializeLE(snLo).toString()),
           new anchor.BN(deserializeLE(snHi).toString()),
           Array.from(recpHashA),
+          Array.from(nullifierHashA),
           new anchor.BN(primaryDenominationLamports.toString()),
           Array.from(noteHashA),
         )
@@ -2084,6 +2204,7 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
           sender: depositorA.publicKey,
           poolState: poolPDA,
           noteRegistry: notePDA_A,
+          nullifierRecord: nullifierRecordPDA_A,
           vault: vaultPDA,
           ...arciumAccs(offset, cdOffset("deposit_to_pool")),
         })
@@ -2125,6 +2246,7 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
           new anchor.BN(deserializeLE(snLo).toString()),
           new anchor.BN(deserializeLE(snHi).toString()),
           Array.from(recpHashB),
+          Array.from(nullifierHashB),
           new anchor.BN(primaryDenominationLamports.toString()),
           Array.from(noteHashB),
         )
@@ -2132,6 +2254,7 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
           sender: depositorB.publicKey,
           poolState: poolPDA,
           noteRegistry: notePDA_B,
+          nullifierRecord: nullifierRecordPDA_B,
           vault: vaultPDA,
           ...arciumAccs(offset, cdOffset("deposit_to_pool")),
         })
@@ -2157,6 +2280,10 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
       const pub_ = x25519.getPublicKey(priv);
       const cipher = new RescueCipher(x25519.getSharedSecret(priv, mxeKey));
       const [sLo, sHi] = splitSecretToU128(secret);
+      const nullifierRecordPDA = deriveNullifierRecordPda(
+        programId,
+        publicNullifierHash(secret),
+      );
       const nLo = randomBytes(16);
       const cLo = cipher.encrypt([sLo], nLo);
       const nHi = randomBytes(16);
@@ -2178,6 +2305,7 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
         .accountsPartial({
           relayer: relayer.publicKey,
           noteRegistry: notePd,
+          nullifierRecord: nullifierRecordPDA,
           poolState: poolPDA,
           vault: vaultPDA,
           nullifierRegistry: nullifierRegistryPDA,
@@ -2227,6 +2355,7 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
     // Create a note and immediately try to withdraw before MPC callback.
     const testSecret = new Uint8Array(randomBytes(32));
     const testWithdrawKey = new Uint8Array(randomBytes(32));
+    const testNullifierHash = publicNullifierHash(testSecret);
     const testRecpHash = recipientHash(testWithdrawKey, recipient.publicKey);
     const testNoteHash = noteHash(
       testSecret,
@@ -2234,6 +2363,10 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
       primaryDenominationLamports,
     );
     const testNotePDA = pda([Buffer.from("note"), testNoteHash], programId);
+    const testNullifierRecordPDA = deriveNullifierRecordPda(
+      programId,
+      testNullifierHash,
+    );
 
     const mxeKey = await getMXEKey(provider, programId);
     const priv = x25519.utils.randomSecretKey();
@@ -2264,6 +2397,7 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
         nonceSecLoB,
         nonceSecHiB,
         Array.from(testRecpHash),
+        Array.from(testNullifierHash),
         new anchor.BN(primaryDenominationLamports.toString()),
         Array.from(testNoteHash),
       )
@@ -2271,6 +2405,7 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
         sender: payer.publicKey,
         poolState: poolPDA,
         noteRegistry: testNotePDA,
+        nullifierRecord: testNullifierRecordPDA,
         vault: vaultPDA,
         ...arciumAccs(depositOffset, cdOffset("deposit_to_pool")),
       })
@@ -2303,6 +2438,7 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
         .accountsPartial({
           relayer: relayer.publicKey,
           noteRegistry: testNotePDA,
+          nullifierRecord: testNullifierRecordPDA,
           poolState: poolPDA,
           vault: vaultPDA,
           nullifierRegistry: nullifierRegistryPDA,
@@ -2344,6 +2480,7 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
     // Deposit
     const testSecret = new Uint8Array(randomBytes(32));
     const testWithdrawKey = new Uint8Array(randomBytes(32));
+    const testNullifierHash = publicNullifierHash(testSecret);
     const testRecipient = Keypair.generate();
     const testRecpHash = recipientHash(
       testWithdrawKey,
@@ -2355,6 +2492,10 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
       primaryDenominationLamports,
     );
     const testNotePDA = pda([Buffer.from("note"), testNoteHash], programId);
+    const testNullifierRecordPDA = deriveNullifierRecordPda(
+      programId,
+      testNullifierHash,
+    );
 
     const sig = await provider.connection.requestAirdrop(
       testRecipient.publicKey,
@@ -2392,6 +2533,7 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
         new anchor.BN(deserializeLE(sNLo).toString()),
         new anchor.BN(deserializeLE(sNHi).toString()),
         Array.from(testRecpHash),
+        Array.from(testNullifierHash),
         new anchor.BN(primaryDenominationLamports.toString()),
         Array.from(testNoteHash),
       )
@@ -2399,6 +2541,7 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
         sender: payer.publicKey,
         poolState: poolPDA,
         noteRegistry: testNotePDA,
+        nullifierRecord: testNullifierRecordPDA,
         vault: vaultPDA,
         ...arciumAccs(dOff, cdOffset("deposit_to_pool")),
       })
@@ -2439,6 +2582,7 @@ describe("Lowkie — Arcium MXE Privacy Pool", () => {
       .accountsPartial({
         relayer: relayer.publicKey,
         noteRegistry: testNotePDA,
+        nullifierRecord: testNullifierRecordPDA,
         poolState: poolPDA,
         vault: vaultPDA,
         nullifierRegistry: nullifierRegistryPDA,

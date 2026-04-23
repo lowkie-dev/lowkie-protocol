@@ -2,8 +2,27 @@
 target/
 node_modules/
 .env
+.env.local
+.env.*.local
+**/.env
 build/
+dist/
 **/*.rs.bk
 test-ledger/
 /tmp/lowkie-*.json
+/recovery/
+**/recovery/
 TECHNICAL_SPEC.md
+/artifacts/*
+*.tgz
+*.tsbuildinfo
+
+# OS / Editor
+.DS_Store
+.vscode/
+
+# Build artefacts
+write_files.py
+
+# Logs
+*.log

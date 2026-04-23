@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Lowkie Protocol — Privacy-preserving SOL transfers test dashboard">
+  <title>Lowkie — Test Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app">
+    <!-- Header -->
+    <header class="header">
+      <div class="header-brand">
+        <div class="logo-icon">
+          <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+            <circle cx="14" cy="14" r="12" stroke="url(#logo-grad)" stroke-width="2.5" fill="none"/>
+            <path d="M10 14 L14 10 L18 14 L14 18Z" fill="url(#logo-grad)"/>
+            <defs>
+              <linearGradient id="logo-grad" x1="0" y1="0" x2="28" y2="28">
+                <stop offset="0%" stop-color="#a78bfa"/>
+                <stop offset="100%" stop-color="#06b6d4"/>
+              </linearGradient>
+            </defs>
+          </svg>
+        </div>
+        <h1 class="header-title">Lowkie</h1>
+        <span class="header-badge">Test Dashboard</span>
+      </div>
+      <div class="header-status" id="header-status">
+        <div style="display:inline-block; margin-right: 15px;">
+          <input type="password" id="input-auth-token" placeholder="API Auth Token" style="width: 150px; background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); color: #fff; padding: 4px 8px; border-radius: 4px; font-family: 'JetBrains Mono', monospace; font-size: 0.85rem;" autocomplete="off">
+        </div>
+        <span class="status-dot" id="status-dot"></span>
+        <span class="status-text" id="status-text">Connecting...</span>
+      </div>
+    </header>
+
+    <!-- Main content -->
+    <main class="main">
+      <!-- Health + Info Row -->
+      <section class="info-grid">
+        <div class="card card-glass" id="health-card">
+          <div class="card-header">
+            <h2 class="card-title">
+              <span class="card-icon">🏥</span> Backend Health
+            </h2>
+            <button class="btn btn-sm btn-ghost" id="btn-refresh-health">↻ Refresh</button>
+          </div>
+          <div class="card-body" id="health-body">
+            <div class="placeholder-text">Click refresh to check backend status</div>
+          </div>
+        </div>
+
+        <div class="card card-glass" id="pools-card">
+          <div class="card-header">
+            <h2 class="card-title">
+              <span class="card-icon">🏊</span> Pool Status
+            </h2>
+            <button class="btn btn-sm btn-ghost" id="btn-refresh-pools">↻ Refresh</button>
+          </div>
+          <div class="card-body" id="pools-body">
+            <div class="placeholder-text">Click refresh to check pool status</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Send Transfer -->
+      <section class="card card-glass" id="send-card">
+        <div class="card-header">
+          <h2 class="card-title">
+            <span class="card-icon">🔒</span> Send Private Transfer
+          </h2>
+        </div>
+        <div class="card-body">
+          <form id="send-form" class="form-grid">
+            <div class="form-group">
+              <label for="input-sender" class="form-label">Sender Wallet (Auto-generated for testing)</label>
+              <input
+                type="text"
+                id="input-sender"
+                class="form-input"
+                readonly
+                style="background: rgba(0,0,0,0.1); color: #888;"
+              >
+            </div>
+            <div class="form-group">
+              <label for="input-recipient" class="form-label">Recipient Public Key</label>
+              <input
+                type="text"
+                id="input-recipient"
+                class="form-input"
+                placeholder="Base58 public key..."
+                autocomplete="off"
+                spellcheck="false"
+                required
+              >
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="input-amount" class="form-label">Amount (SOL)</label>
+                <input
+                  type="number"
+                  id="input-amount"
+                  class="form-input"
+                  placeholder="0.10"
+                  step="0.01"
+                  min="0.01"
+                  required
+                >
+              </div>
+              <div class="form-group">
+                <label for="input-delay" class="form-label">Relay Delay (ms)</label>
+                <input
+                  type="number"
+                  id="input-delay"
+                  class="form-input"
+                  value="15000"
+                  step="1000"
+                  min="1000"
+                >
+              </div>
+            </div>
+            <div class="form-actions">
+              <button type="submit" class="btn btn-primary" id="btn-send">
+                <span class="btn-label">Send Transfer</span>
+                <span class="btn-spinner" id="send-spinner"></span>
+              </button>
+            </div>
+          </form>
+          <div id="send-result" class="result-box hidden"></div>
+        </div>
+      </section>
+
+      <!-- Recovery -->
+      <section class="card card-glass" id="recovery-card">
+        <div class="card-header">
+          <h2 class="card-title">
+            <span class="card-icon">🔧</span> Recovery
+          </h2>
+          <button class="btn btn-sm btn-ghost" id="btn-list-recoverable">List Recoverable</button>
+        </div>
+        <div class="card-body">
+          <div id="recoverable-list" class="recoverable-list">
+            <div class="placeholder-text">No recoverable transfers loaded</div>
+          </div>
+          <div class="form-row recovery-actions" id="recovery-actions" style="display:none;">
+            <div class="form-group" style="flex:1;">
+              <label for="input-recovery-id" class="form-label">Recovery ID</label>
+              <input type="text" id="input-recovery-id" class="form-input" placeholder="lowkie-...">
+            </div>
+            <button class="btn btn-secondary" id="btn-recover-withdraw">Retry Withdraw</button>
+            <button class="btn btn-ghost" id="btn-recover-refund">Refund</button>
+          </div>
+          <div id="recovery-result" class="result-box hidden"></div>
+        </div>
+      </section>
+
+      <!-- API Log -->
+      <section class="card card-glass" id="log-card">
+        <div class="card-header">
+          <h2 class="card-title">
+            <span class="card-icon">📋</span> API Log
+          </h2>
+          <button class="btn btn-sm btn-ghost" id="btn-clear-log">Clear</button>
+        </div>
+        <div class="card-body">
+          <pre class="log-output" id="log-output">Ready. Waiting for API calls...</pre>
+        </div>
+      </section>
+    </main>
+
+    <!-- Footer -->
+    <footer class="footer">
+      <span>Lowkie Protocol — Privacy-preserving SOL transfers</span>
+      <span class="footer-sep">·</span>
+      <span id="footer-network">Network: —</span>
+    </footer>
+  </div>
+
+  <script src="https://unpkg.com/@solana/web3.js@1.90.0/lib/index.iife.min.js"></script>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

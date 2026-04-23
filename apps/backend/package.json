@@ -1,0 +1,22 @@
+{
+  "name": "lowkie-backend",
+  "private": true,
+  "scripts": {
+    "start": "node ../../node_modules/ts-node/dist/bin.js --project tsconfig.json server.ts",
+    "typecheck": "node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@arcium-hq/client": "^0.9.5",
+    "@coral-xyz/anchor": "^0.32.0",
+    "@fastify/cors": "^9.0.1",
+    "@solana/web3.js": "^1.95.3",
+    "bs58": "^6.0.0",
+    "dotenv": "^16.4.5",
+    "fastify": "^4.26.2"
+  },
+  "devDependencies": {
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.5",
+    "@types/node": "^20.12.7"
+  }
+}

@@ -1,7 +1,7 @@
 ---
 name: solana-dev
-description: 'Use when working on this Solana repository: Anchor program changes, PDA/account design, Arcium MPC circuits, client orchestration, relayer flows, Solana security reviews, localnet/devnet testing, or repo structure decisions. Adapts Solana Foundation best practices to this repo''s current stack: Anchor 0.32.x, arcium-anchor 0.9.5, @coral-xyz/anchor, @solana/web3.js, ts-mocha, and Arcium MXE circuits.'
-argument-hint: 'Describe the Solana, Anchor, Arcium, testing, or repo-structure task'
+description: "Use when working on this Solana repository: Anchor program changes, PDA/account design, Arcium MPC circuits, client orchestration, relayer flows, Solana security reviews, localnet/devnet testing, or repo structure decisions. Adapts Solana Foundation best practices to this repo's current stack: Anchor 0.32.x, arcium-anchor 0.9.5, @coral-xyz/anchor, @solana/web3.js, ts-mocha, and Arcium MXE circuits."
+argument-hint: "Describe the Solana, Anchor, Arcium, testing, or repo-structure task"
 user-invocable: true
 ---
 

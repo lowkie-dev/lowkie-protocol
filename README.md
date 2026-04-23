@@ -229,27 +229,27 @@ This preserves the encrypted pool balance while resetting the encrypted nullifie
 
 ### NullifierRegistryState `PDA: [b"nullifier_registry", denomination_lamports_le]`
 
-| Field                 | Type                 | What it stores                                                                                                                       |
-| --------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `encrypted_nullifiers` | `[[u8; 32]; N]`     | `Enc<Mxe, [u128; N]>` flattened into registry words. Word 0 is the active entry count; remaining words are 2-limb nullifier entries. |
-| `registry_nonce`      | `u128`               | Nonce shared by the encrypted registry output.                                                                                       |
-| `pool_snapshot_ct`    | `[u8; 32]`           | Element 0 of the `WithdrawOutput` struct. Stored so the full output layout can be passed back into MPC without changing CTR positions. |
-| `bump`                | `u8`                 | PDA bump.                                                                                                                            |
+| Field                  | Type            | What it stores                                                                                                                         |
+| ---------------------- | --------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `encrypted_nullifiers` | `[[u8; 32]; N]` | `Enc<Mxe, [u128; N]>` flattened into registry words. Word 0 is the active entry count; remaining words are 2-limb nullifier entries.   |
+| `registry_nonce`       | `u128`          | Nonce shared by the encrypted registry output.                                                                                         |
+| `pool_snapshot_ct`     | `[u8; 32]`      | Element 0 of the `WithdrawOutput` struct. Stored so the full output layout can be passed back into MPC without changing CTR positions. |
+| `bump`                 | `u8`            | PDA bump.                                                                                                                              |
 
 ### NoteAccount `PDA: [b"note", note_hash]`
 
-| Field                   | Type       | What it stores                                                                                                                             |
-| ----------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `note_hash`             | `[u8; 32]` | `SHA256(secret ║ recipient ║ amount_lamports_le)` — commitment, reveals nothing without preimage.                                          |
-| `status`                | enum       | `PendingMpc → Ready → Withdrawn` (transient) before relayer cleanup closes the spent note account, or `Failed` after a duplicate withdraw. |
-| `recipient_hash`        | `[u8; 32]` | `SHA256(withdraw_key ║ recipient_pubkey)` — recipient commitment, verified during withdraw without revealing `note_secret`.                |
-| `encrypted_amount`      | `[u8; 32]` | `Enc<Mxe, u64>` — this note's amount. Set by `deposit_callback`. Only MXE can decrypt.                                                     |
-| `encrypted_secret_lo`   | `[u8; 32]` | `Enc<Mxe, u128>` — lower 128 bits of the note secret, stored for MPC-side secret verification.                                            |
-| `encrypted_secret_hi`   | `[u8; 32]` | `Enc<Mxe, u128>` — upper 128 bits of the note secret, stored for MPC-side secret verification.                                            |
-| `encrypted_pool_at_deposit` | `[u8; 32]` | Pool-balance snapshot from element 0 of the `DepositOutput` struct. Preserved so the full struct layout survives CTR-mode indexing.     |
-| `amount_nonce`          | `u128`     | Shared nonce for every `Enc<Mxe>` field emitted by the deposit callback. Required to pass the full deposit snapshot back into withdraw MPC. |
-| `lamports_for_transfer` | `u64`      | Set during deposit when the native SOL transfer is already visible, then cleared after a successful withdrawal callback.                   |
-| `bump`                  | `u8`       | PDA bump.                                                                                                                                   |
+| Field                       | Type       | What it stores                                                                                                                              |
+| --------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `note_hash`                 | `[u8; 32]` | `SHA256(secret ║ recipient ║ amount_lamports_le)` — commitment, reveals nothing without preimage.                                           |
+| `status`                    | enum       | `PendingMpc → Ready → Withdrawn` (transient) before relayer cleanup closes the spent note account, or `Failed` after a duplicate withdraw.  |
+| `recipient_hash`            | `[u8; 32]` | `SHA256(withdraw_key ║ recipient_pubkey)` — recipient commitment, verified during withdraw without revealing `note_secret`.                 |
+| `encrypted_amount`          | `[u8; 32]` | `Enc<Mxe, u64>` — this note's amount. Set by `deposit_callback`. Only MXE can decrypt.                                                      |
+| `encrypted_secret_lo`       | `[u8; 32]` | `Enc<Mxe, u128>` — lower 128 bits of the note secret, stored for MPC-side secret verification.                                              |
+| `encrypted_secret_hi`       | `[u8; 32]` | `Enc<Mxe, u128>` — upper 128 bits of the note secret, stored for MPC-side secret verification.                                              |
+| `encrypted_pool_at_deposit` | `[u8; 32]` | Pool-balance snapshot from element 0 of the `DepositOutput` struct. Preserved so the full struct layout survives CTR-mode indexing.         |
+| `amount_nonce`              | `u128`     | Shared nonce for every `Enc<Mxe>` field emitted by the deposit callback. Required to pass the full deposit snapshot back into withdraw MPC. |
+| `lamports_for_transfer`     | `u64`      | Set during deposit when the native SOL transfer is already visible, then cleared after a successful withdrawal callback.                    |
+| `bump`                      | `u8`       | PDA bump.                                                                                                                                   |
 
 ---
 
@@ -335,7 +335,13 @@ yarn ci:check
 yarn local:validate
 
 # Deploy — copy the printed program ID
-arcium deploy -u l
+arcium deploy \
+  --program-name lowkie_pool \
+  --program-keypair target/deploy/lowkie_pool-keypair.json \
+  --keypair-path ~/.config/solana/id.json \
+  --cluster-offset 0 \
+  --recovery-set-size 4 \
+  --rpc-url localnet
 # → update Anchor.toml, Arcium.toml, .env with the printed program ID
 
 # One-time comp def init + pool init (run tests — they do this)
@@ -404,17 +410,31 @@ yarn -s local:validate
 2. RPC health check
 3. Integration tests (`yarn -s test`)
 
-## Frontend Hook (Browser + API Bridge)
+## Backend API, SDK, And Test Frontend
 
-You can run a minimal frontend that triggers the existing `send.ts` + `relayer.ts` flow through an API bridge.
+The deployable shape is now:
 
-### Start frontend bridge
+- `apps/backend/` — the API your real React frontend can call
+- `packages/lowkie-sdk/` — a typed client for frontend integration
+- `apps/test-frontend/` — a demo UI for local/devnet testing only
+
+### Start backend API
 
 ```bash
-yarn frontend
+yarn --cwd apps/backend start
 ```
 
-Open: `http://127.0.0.1:5174`
+### Start test frontend
+
+```bash
+yarn --cwd apps/test-frontend start
+```
+
+If the test frontend runs on a different origin, set:
+
+```bash
+LOWKIE_API_BASE=http://127.0.0.1:5174
+```
 
 ### Endpoints
 
@@ -431,12 +451,21 @@ Open: `http://127.0.0.1:5174`
 
 Notes:
 
-1. Keys remain server-side (`ANCHOR_WALLET`, `RELAYER_KEYPAIR_PATH` from env).
-2. The bridge now supports production guardrails: bearer-token auth, CORS origin allowlists, fixed-window rate limiting, request-size bounds, and serialized `/api/send` execution.
-3. If `FRONTEND_HOST` is not loopback, startup now requires `LOWKIE_REQUIRE_API_AUTH=true`, `LOWKIE_API_AUTH_TOKEN`, and `LOWKIE_ALLOWED_ORIGINS`.
+1. Keys remain server-side. The backend uses `SENDER_WALLET` and `RELAYER_KEYPAIR_PATH`.
+2. The backend supports bearer-token auth, CORS origin allowlists, fixed-window rate limiting, request-size bounds, and serialized `/api/send` execution.
+3. If `BACKEND_HOST` is not loopback, startup requires `LOWKIE_REQUIRE_API_AUTH=true`, `LOWKIE_API_AUTH_TOKEN`, and `LOWKIE_ALLOWED_ORIGINS`.
 4. Relayer key must differ from sender key.
 
-Recommended internet-facing bridge env:
+### API endpoints
+
+- `GET /api/health`
+- `GET /api/relayer/health`
+- `POST /api/send`
+- `GET /api/recoverable`
+- `POST /api/recover`
+- `POST /api/relay`
+
+Recommended internet-facing backend env:
 
 ```bash
 LOWKIE_REQUIRE_API_AUTH=true
@@ -449,6 +478,10 @@ LOWKIE_AUTO_COMPACT_REGISTRY=false
 LOWKIE_WRITE_NOTE_FILE=false
 LOWKIE_ALLOW_PLAINTEXT_NOTE_FILE=false
 ```
+
+### SDK
+
+Use `packages/lowkie-sdk/src/index.ts` as the typed client for your future React frontend.
 
 ---
 
@@ -496,9 +529,16 @@ yarn devnet:test
 ANCHOR_PROVIDER_URL=https://api.devnet.solana.com \
 ARCIUM_CLUSTER_OFFSET=456 \
 LOWKIE_PROGRAM_ID=<deployed-program-id> \
-LOWKIE_CIRCUIT_SOURCE_MODE=offchain \
 LOWKIE_OFFCHAIN_CIRCUIT_BASE_URL=https://cdn.example.com/lowkie/ \
 yarn bootstrap:program
+
+# The program is not send-ready until bootstrap creates all four computation
+# definitions and every denomination pool PDA. If send/front-end health reports
+# missing pools or comp defs, your .env is still pointing at a partial deploy.
+
+# LOWKIE_CIRCUIT_SOURCE_MODE now accepts auto/onchain/offchain.
+# If LOWKIE_OFFCHAIN_CIRCUIT_BASE_URL or LOWKIE_OFFCHAIN_*_URL is set,
+# auto mode selects offchain automatically.
 
 # 8. Manual send on devnet
 ANCHOR_PROVIDER_URL=https://api.devnet.solana.com \

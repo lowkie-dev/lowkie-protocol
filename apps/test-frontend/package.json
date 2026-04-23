@@ -1,0 +1,8 @@
+{
+  "name": "lowkie-test-frontend",
+  "private": true,
+  "scripts": {
+    "start": "node ../../node_modules/ts-node/dist/bin.js --project tsconfig.json server.ts",
+    "typecheck": "node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json"
+  }
+}

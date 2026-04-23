@@ -30,7 +30,7 @@ use arcium_anchor::prelude::*;
 use arcium_client::idl::arcium::types::{CallbackAccount, CircuitSource, OffChainCircuitSource};
 use sha2::{Digest, Sha256};
 
-declare_id!("2mnSg2aKoKqzEUHPQTGwnKFnyjML8eSWefsinrfN4zfQ");
+declare_id!("8BQ1SwL7udKofSCAGgYXcRX7uMCvt33k6nbSEbXBkYNF");
 
 /// Computation definition offsets — derived at compile time from circuit names.
 /// These must match the `#[instruction]` function names in `encrypted-ixs/circuits.rs`.
@@ -77,6 +77,60 @@ fn resolve_circuit_source_override(
 pub mod lowkie_pool {
     use super::*;
 
+    pub fn initialize_protocol_config(
+        ctx: Context<InitializeProtocolConfig>,
+        maintenance_authority: Pubkey,
+    ) -> Result<()> {
+        require!(
+            maintenance_authority != Pubkey::default(),
+            ErrorCode::InvalidAuthority,
+        );
+
+        let protocol_config = &mut ctx.accounts.protocol_config;
+        protocol_config.admin = ctx.accounts.payer.key();
+        protocol_config.maintenance_authority = maintenance_authority;
+        protocol_config.bump = ctx.bumps.protocol_config;
+        Ok(())
+    }
+
+    pub fn update_protocol_config(
+        ctx: Context<UpdateProtocolConfig>,
+        new_admin: Option<Pubkey>,
+        new_maintenance_authority: Option<Pubkey>,
+    ) -> Result<()> {
+        let protocol_config = &mut ctx.accounts.protocol_config;
+
+        if let Some(admin) = new_admin {
+            require!(admin != Pubkey::default(), ErrorCode::InvalidAuthority);
+            protocol_config.admin = admin;
+        }
+
+        if let Some(maintenance_authority) = new_maintenance_authority {
+            require!(
+                maintenance_authority != Pubkey::default(),
+                ErrorCode::InvalidAuthority,
+            );
+            protocol_config.maintenance_authority = maintenance_authority;
+        }
+
+        Ok(())
+    }
+
+    /// Admin-only: close a pool whose MPC callback never fired
+    /// (`is_initialized == false`).  Recovers the rent from pool_state, vault,
+    /// and nullifier_registry so `init_pool` can be retried cleanly.
+    pub fn close_uninitialized_pool(
+        ctx: Context<CloseUninitializedPool>,
+        _denomination_lamports: u64,
+    ) -> Result<()> {
+        require!(
+            !ctx.accounts.pool_state.is_initialized,
+            ErrorCode::PoolAlreadyInitialized,
+        );
+        // Anchor `close = admin` on each account handles lamport transfer + zeroing.
+        Ok(())
+    }
+
     // ── 0. Comp def registration (one-time per deploy) ────────────────────────
 
     pub fn init_init_pool_comp_def(
@@ -84,6 +138,11 @@ pub mod lowkie_pool {
         source_url: Option<String>,
         source_hash: Option<[u8; 32]>,
     ) -> Result<()> {
+        require_keys_eq!(
+            ctx.accounts.payer.key(),
+            ctx.accounts.protocol_config.admin,
+            ErrorCode::UnauthorizedProtocolAdmin,
+        );
         let circuit_source_override =
             resolve_circuit_source_override(source_url, source_hash)?;
         init_comp_def(ctx.accounts, circuit_source_override, None)?;
@@ -94,6 +153,11 @@ pub mod lowkie_pool {
         source_url: Option<String>,
         source_hash: Option<[u8; 32]>,
     ) -> Result<()> {
+        require_keys_eq!(
+            ctx.accounts.payer.key(),
+            ctx.accounts.protocol_config.admin,
+            ErrorCode::UnauthorizedProtocolAdmin,
+        );
         let circuit_source_override =
             resolve_circuit_source_override(source_url, source_hash)?;
         init_comp_def(ctx.accounts, circuit_source_override, None)?;
@@ -104,6 +168,11 @@ pub mod lowkie_pool {
         source_url: Option<String>,
         source_hash: Option<[u8; 32]>,
     ) -> Result<()> {
+        require_keys_eq!(
+            ctx.accounts.payer.key(),
+            ctx.accounts.protocol_config.admin,
+            ErrorCode::UnauthorizedProtocolAdmin,
+        );
         let circuit_source_override =
             resolve_circuit_source_override(source_url, source_hash)?;
         init_comp_def(ctx.accounts, circuit_source_override, None)?;
@@ -114,6 +183,11 @@ pub mod lowkie_pool {
         source_url: Option<String>,
         source_hash: Option<[u8; 32]>,
     ) -> Result<()> {
+        require_keys_eq!(
+            ctx.accounts.payer.key(),
+            ctx.accounts.protocol_config.admin,
+            ErrorCode::UnauthorizedProtocolAdmin,
+        );
         let circuit_source_override =
             resolve_circuit_source_override(source_url, source_hash)?;
         init_comp_def(ctx.accounts, circuit_source_override, None)?;
@@ -237,6 +311,7 @@ pub mod lowkie_pool {
         secret_nonce_lo:      u128,
         secret_nonce_hi:      u128,
         recipient_hash:       [u8; 32],
+        nullifier_hash:       [u8; 32],
         amount_lamports:      u64,
         note_hash:            [u8; 32],
     ) -> Result<()> {
@@ -246,16 +321,36 @@ pub mod lowkie_pool {
             ctx.accounts.pool_state.denomination_lamports == amount_lamports,
             ErrorCode::PoolDenominationMismatch
         );
+        require!(nullifier_hash != [0u8; 32], ErrorCode::InvalidNullifierHash);
+
+        let nullifier_record = &mut ctx.accounts.nullifier_record;
+        if nullifier_record.nullifier_hash == [0u8; 32] {
+            nullifier_record.nullifier_hash = nullifier_hash;
+            nullifier_record.spent = false;
+            nullifier_record.bump = ctx.bumps.nullifier_record;
+        } else {
+            require!(
+                nullifier_record.nullifier_hash == nullifier_hash,
+                ErrorCode::InvalidNullifierRecord,
+            );
+        }
+        require!(
+            !nullifier_record.spent,
+            ErrorCode::NullifierAlreadySpent,
+        );
 
         let note = &mut ctx.accounts.note_registry;
         note.note_hash             = note_hash;
         note.status                = NoteStatus::PendingMpc;
+        note.sender                = ctx.accounts.sender.key();
         note.recipient_hash        = recipient_hash;
+        note.nullifier_hash        = nullifier_hash;
         note.encrypted_amount      = [0u8; 32];
         note.encrypted_secret_lo   = [0u8; 32];
         note.encrypted_secret_hi   = [0u8; 32];
         note.encrypted_pool_at_deposit = [0u8; 32];
         note.amount_nonce          = 0;
+        note.pool_credit_applied   = false;
         // Store plaintext amount at deposit time — the deposit tx already reveals
         // this via the SOL CPI, so no additional leakage. The withdraw instruction
         // reads this value instead of taking it as an instruction argument.
@@ -326,6 +421,12 @@ pub mod lowkie_pool {
             &ctx.accounts.computation_account,
         ) {
             Ok(DepositToPoolOutput { field_0 }) => {
+                if field_0.ciphertexts.len() != 4 {
+                    ctx.accounts.note_registry.status = NoteStatus::Failed;
+                    emit!(DepositFailedEvent { pool: ctx.accounts.pool_state.key() });
+                    return Ok(());
+                }
+
                 let nonce = field_0.nonce;
                 let pool  = &mut ctx.accounts.pool_state;
                 pool.encrypted_balance = field_0.ciphertexts[0];
@@ -337,6 +438,7 @@ pub mod lowkie_pool {
                 note.encrypted_secret_hi       = field_0.ciphertexts[3];
                 note.encrypted_pool_at_deposit = field_0.ciphertexts[0];
                 note.amount_nonce              = nonce;
+                note.pool_credit_applied       = true;
                 note.status                    = NoteStatus::Ready;
 
                 emit!(DepositConfirmedEvent { pool: ctx.accounts.pool_state.key() });
@@ -344,7 +446,7 @@ pub mod lowkie_pool {
             Err(e) => {
                 msg!("deposit_to_pool error: {}", e);
                 ctx.accounts.note_registry.status = NoteStatus::Failed;
-                return Err(ErrorCode::MpcFailed.into());
+                emit!(DepositFailedEvent { pool: ctx.accounts.pool_state.key() });
             }
         }
         Ok(())
@@ -371,6 +473,10 @@ pub mod lowkie_pool {
     ) -> Result<()> {
         require!(ctx.accounts.note_registry.status == NoteStatus::Ready, ErrorCode::NoteNotReady);
         require!(ctx.accounts.pool_state.is_initialized, ErrorCode::PoolNotInitialized);
+        require!(
+            !ctx.accounts.nullifier_record.spent,
+            ErrorCode::NullifierAlreadySpent,
+        );
 
         // ── Recipient identity verification ──────────────────────────────
         // The recipient pubkey is NOT stored on-chain — only its hash is.
@@ -460,6 +566,7 @@ pub mod lowkie_pool {
         let registry_key  = ctx.accounts.nullifier_registry.key();
         let vault_key     = ctx.accounts.vault.key();
         let recipient_key = ctx.accounts.recipient.key();
+        let nullifier_record_key = ctx.accounts.nullifier_record.key();
 
         queue_computation(
             ctx.accounts,
@@ -470,6 +577,7 @@ pub mod lowkie_pool {
                 &ctx.accounts.mxe_account,
                 &[
                     CallbackAccount { pubkey: note_key,      is_writable: true },
+                    CallbackAccount { pubkey: nullifier_record_key, is_writable: true },
                     CallbackAccount { pubkey: pool_key,      is_writable: true },
                     CallbackAccount { pubkey: registry_key,  is_writable: true },
                     CallbackAccount { pubkey: vault_key,     is_writable: true },
@@ -499,10 +607,14 @@ pub mod lowkie_pool {
                 let encrypted_output = field_0.field_0;
                 let status_code = field_0.field_1;
 
-                require!(
-                    encrypted_output.ciphertexts.len() == 1 + NULLIFIER_REGISTRY_WORDS,
-                    ErrorCode::InvalidNullifierRegistryOutput,
-                );
+                if encrypted_output.ciphertexts.len() != 1 + NULLIFIER_REGISTRY_WORDS {
+                    ctx.accounts.note_registry.status = NoteStatus::Ready;
+                    emit!(WithdrawRejectedEvent {
+                        pool: ctx.accounts.pool_state.key(),
+                        reason_code: 255,
+                    });
+                    return Ok(());
+                }
                 let registry_ciphertexts =
                     extract_registry_ciphertexts(&encrypted_output.ciphertexts[1..])?;
                 let pool_key = ctx.accounts.pool_state.key();
@@ -518,6 +630,7 @@ pub mod lowkie_pool {
                 match status_code {
                     WITHDRAW_STATUS_ACCEPTED => {
                         let lamports = ctx.accounts.note_registry.lamports_for_transfer;
+                        ctx.accounts.nullifier_record.spent = true;
 
                         // PRIVACY: Direct lamport manipulation instead of system_program::transfer.
                         // The vault is a program-owned PDA, so we can decrease its lamports directly.
@@ -539,6 +652,7 @@ pub mod lowkie_pool {
                         emit!(WithdrawCompleteEvent { pool: pool_key });
                     }
                     WITHDRAW_STATUS_NULLIFIER_ALREADY_SPENT => {
+                        ctx.accounts.nullifier_record.spent = true;
                         ctx.accounts.note_registry.status = NoteStatus::Failed;
                         emit!(WithdrawRejectedEvent {
                             pool: pool_key,
@@ -565,7 +679,10 @@ pub mod lowkie_pool {
             Err(e) => {
                 msg!("withdraw_from_pool error: {}", e);
                 ctx.accounts.note_registry.status = NoteStatus::Ready;
-                return Err(ErrorCode::MpcFailed.into());
+                emit!(WithdrawRejectedEvent {
+                    pool: ctx.accounts.pool_state.key(),
+                    reason_code: 255,
+                });
             }
         }
         Ok(())
@@ -588,6 +705,37 @@ pub mod lowkie_pool {
         Ok(())
     }
 
+    pub fn refund_failed_deposit(
+        ctx: Context<RefundFailedDeposit>,
+        original_note_hash: [u8; 32],
+    ) -> Result<()> {
+        let note = &mut ctx.accounts.note_registry;
+        require!(note.status == NoteStatus::Failed, ErrorCode::NoteNotFailed);
+        require!(
+            !note.pool_credit_applied,
+            ErrorCode::DepositAlreadyApplied,
+        );
+
+        let lamports = note.lamports_for_transfer;
+        require!(lamports > 0, ErrorCode::NoRefundableLamports);
+
+        let vault_info = ctx.accounts.vault.to_account_info();
+        let sender_info = ctx.accounts.sender.to_account_info();
+        require!(vault_info.lamports() >= lamports, ErrorCode::InsufficientVault);
+
+        **vault_info.try_borrow_mut_lamports()? -= lamports;
+        **sender_info.try_borrow_mut_lamports()? += lamports;
+
+        note.lamports_for_transfer = 0;
+
+        emit!(FailedDepositRefundedEvent {
+            pool: ctx.accounts.pool_state.key(),
+        });
+
+        let _ = original_note_hash;
+        Ok(())
+    }
+
     // ── 5. Nullifier registry compaction (MPC) ─────────────────────────────
     // Resets the encrypted nullifier registry to zeros while preserving the
     // current pool balance. Called by the relayer when the registry is full.
@@ -595,9 +743,14 @@ pub mod lowkie_pool {
     pub fn compact_registry(
         ctx: Context<CompactRegistry>,
         computation_offset: u64,
-        denomination_lamports: u64,
+        _denomination_lamports: u64,
     ) -> Result<()> {
         require!(ctx.accounts.pool_state.is_initialized, ErrorCode::PoolNotInitialized);
+        require_keys_eq!(
+            ctx.accounts.relayer.key(),
+            ctx.accounts.protocol_config.maintenance_authority,
+            ErrorCode::UnauthorizedMaintenanceAuthority,
+        );
 
         let pool_nonce = ctx.accounts.pool_state.balance_nonce;
 
@@ -677,10 +830,64 @@ pub mod lowkie_pool {
 // Account structs
 // ─────────────────────────────────────────────────────────────────────────────
 
+#[derive(Accounts)]
+pub struct InitializeProtocolConfig<'info> {
+    #[account(mut)] pub payer: Signer<'info>,
+    #[account(
+        init,
+        payer = payer,
+        space = ProtocolConfig::SPACE,
+        seeds = [b"protocol_config"],
+        bump
+    )]
+    pub protocol_config: Box<Account<'info, ProtocolConfig>>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct UpdateProtocolConfig<'info> {
+    #[account(address = protocol_config.admin @ ErrorCode::UnauthorizedProtocolAdmin)]
+    pub admin: Signer<'info>,
+    #[account(mut, seeds = [b"protocol_config"], bump = protocol_config.bump)]
+    pub protocol_config: Box<Account<'info, ProtocolConfig>>,
+}
+
+#[derive(Accounts)]
+#[instruction(_denomination_lamports: u64)]
+pub struct CloseUninitializedPool<'info> {
+    #[account(mut, address = protocol_config.admin @ ErrorCode::UnauthorizedProtocolAdmin)]
+    pub admin: Signer<'info>,
+    #[account(seeds = [b"protocol_config"], bump = protocol_config.bump)]
+    pub protocol_config: Box<Account<'info, ProtocolConfig>>,
+    #[account(
+        mut,
+        close = admin,
+        seeds = [b"pool", _denomination_lamports.to_le_bytes().as_ref()],
+        bump = pool_state.bump,
+    )]
+    pub pool_state: Box<Account<'info, PoolState>>,
+    #[account(
+        mut,
+        close = admin,
+        seeds = [b"vault", _denomination_lamports.to_le_bytes().as_ref()],
+        bump = vault.bump,
+    )]
+    pub vault: Box<Account<'info, VaultAccount>>,
+    #[account(
+        mut,
+        close = admin,
+        seeds = [b"nullifier_registry", _denomination_lamports.to_le_bytes().as_ref()],
+        bump = nullifier_registry.bump,
+    )]
+    pub nullifier_registry: Box<Account<'info, NullifierRegistryState>>,
+}
+
 #[init_computation_definition_accounts("init_pool_balance", payer)]
 #[derive(Accounts)]
 pub struct InitInitPoolCompDef<'info> {
     #[account(mut)] pub payer: Signer<'info>,
+    #[account(seeds = [b"protocol_config"], bump = protocol_config.bump)]
+    pub protocol_config: Box<Account<'info, ProtocolConfig>>,
     #[account(mut, address = derive_mxe_pda!())]
     pub mxe_account: Box<Account<'info, MXEAccount>>,
     #[account(mut)]
@@ -700,6 +907,8 @@ pub struct InitInitPoolCompDef<'info> {
 #[derive(Accounts)]
 pub struct InitDepositCompDef<'info> {
     #[account(mut)] pub payer: Signer<'info>,
+    #[account(seeds = [b"protocol_config"], bump = protocol_config.bump)]
+    pub protocol_config: Box<Account<'info, ProtocolConfig>>,
     #[account(mut, address = derive_mxe_pda!())]
     pub mxe_account: Box<Account<'info, MXEAccount>>,
     #[account(mut)]
@@ -719,6 +928,8 @@ pub struct InitDepositCompDef<'info> {
 #[derive(Accounts)]
 pub struct InitWithdrawCompDef<'info> {
     #[account(mut)] pub payer: Signer<'info>,
+    #[account(seeds = [b"protocol_config"], bump = protocol_config.bump)]
+    pub protocol_config: Box<Account<'info, ProtocolConfig>>,
     #[account(mut, address = derive_mxe_pda!())]
     pub mxe_account: Box<Account<'info, MXEAccount>>,
     #[account(mut)]
@@ -827,7 +1038,7 @@ pub struct InitPoolBalanceCallback<'info> {
     transfer_pub_key: [u8;32], transfer_nonce: u128,
     secret_ciphertext_lo: [u8;32], secret_ciphertext_hi: [u8;32],
     secret_nonce_lo: u128, secret_nonce_hi: u128,
-    recipient_hash: [u8;32], amount_lamports: u64, note_hash: [u8;32]
+    recipient_hash: [u8;32], nullifier_hash: [u8;32], amount_lamports: u64, note_hash: [u8;32]
 )]
 pub struct Deposit<'info> {
     #[account(mut)] pub sender: Signer<'info>,
@@ -840,6 +1051,14 @@ pub struct Deposit<'info> {
     pub pool_state: Box<Account<'info, PoolState>>,
     #[account(init, payer = sender, space = NoteAccount::SPACE, seeds = [b"note", note_hash.as_ref()], bump)]
     pub note_registry: Box<Account<'info, NoteAccount>>,
+    #[account(
+        init_if_needed,
+        payer = sender,
+        space = NullifierRecord::SPACE,
+        seeds = [b"nullifier", nullifier_hash.as_ref()],
+        bump
+    )]
+    pub nullifier_record: Box<Account<'info, NullifierRecord>>,
     #[account(
         mut,
         seeds = [b"vault", amount_lamports.to_le_bytes().as_ref()],
@@ -909,6 +1128,12 @@ pub struct Withdraw<'info> {
     pub note_registry: Box<Account<'info, NoteAccount>>,
     #[account(
         mut,
+        seeds = [b"nullifier", note_registry.nullifier_hash.as_ref()],
+        bump = nullifier_record.bump
+    )]
+    pub nullifier_record: Box<Account<'info, NullifierRecord>>,
+    #[account(
+        mut,
         seeds = [b"pool", note_registry.lamports_for_transfer.to_le_bytes().as_ref()],
         bump = pool_state.bump,
         constraint = pool_state.denomination_lamports == note_registry.lamports_for_transfer @ ErrorCode::PoolDenominationMismatch
@@ -974,6 +1199,12 @@ pub struct WithdrawFromPoolCallback<'info> {
     pub note_registry: Box<Account<'info, NoteAccount>>,
     #[account(
         mut,
+        seeds = [b"nullifier", note_registry.nullifier_hash.as_ref()],
+        bump = nullifier_record.bump
+    )]
+    pub nullifier_record: Box<Account<'info, NullifierRecord>>,
+    #[account(
+        mut,
         seeds = [b"pool", pool_state.denomination_lamports.to_le_bytes().as_ref()],
         bump = pool_state.bump
     )]
@@ -1010,10 +1241,49 @@ pub struct CompactSpentNote<'info> {
     pub note_registry: Box<Account<'info, NoteAccount>>,
 }
 
+#[derive(Accounts)]
+#[instruction(original_note_hash: [u8; 32])]
+pub struct RefundFailedDeposit<'info> {
+    #[account(
+        mut,
+        address = note_registry.sender @ ErrorCode::UnauthorizedRefundRecipient
+    )]
+    pub sender: Signer<'info>,
+    #[account(
+        mut,
+        close = sender,
+        seeds = [b"note", original_note_hash.as_ref()],
+        bump = note_registry.bump
+    )]
+    pub note_registry: Box<Account<'info, NoteAccount>>,
+    #[account(
+        mut,
+        close = sender,
+        seeds = [b"nullifier", note_registry.nullifier_hash.as_ref()],
+        bump = nullifier_record.bump
+    )]
+    pub nullifier_record: Box<Account<'info, NullifierRecord>>,
+    #[account(
+        mut,
+        seeds = [b"pool", note_registry.lamports_for_transfer.to_le_bytes().as_ref()],
+        bump = pool_state.bump,
+        constraint = pool_state.denomination_lamports == note_registry.lamports_for_transfer @ ErrorCode::PoolDenominationMismatch
+    )]
+    pub pool_state: Box<Account<'info, PoolState>>,
+    #[account(
+        mut,
+        seeds = [b"vault", note_registry.lamports_for_transfer.to_le_bytes().as_ref()],
+        bump = pool_state.vault_bump
+    )]
+    pub vault: Box<Account<'info, VaultAccount>>,
+}
+
 #[init_computation_definition_accounts("compact_registry", payer)]
 #[derive(Accounts)]
 pub struct InitCompactCompDef<'info> {
     #[account(mut)] pub payer: Signer<'info>,
+    #[account(seeds = [b"protocol_config"], bump = protocol_config.bump)]
+    pub protocol_config: Box<Account<'info, ProtocolConfig>>,
     #[account(mut, address = derive_mxe_pda!())]
     pub mxe_account: Box<Account<'info, MXEAccount>>,
     #[account(mut)]
@@ -1034,6 +1304,8 @@ pub struct InitCompactCompDef<'info> {
 #[instruction(computation_offset: u64, denomination_lamports: u64)]
 pub struct CompactRegistry<'info> {
     #[account(mut)] pub relayer: Signer<'info>,
+    #[account(seeds = [b"protocol_config"], bump = protocol_config.bump)]
+    pub protocol_config: Box<Account<'info, ProtocolConfig>>,
     #[account(
         mut,
         seeds = [b"pool", denomination_lamports.to_le_bytes().as_ref()],
@@ -1104,6 +1376,17 @@ pub struct CompactRegistryCallback<'info> {
 // State accounts
 // ─────────────────────────────────────────────────────────────────────────────
 
+#[account]
+pub struct ProtocolConfig {
+    pub admin: Pubkey,
+    pub maintenance_authority: Pubkey,
+    pub bump: u8,
+}
+
+impl ProtocolConfig {
+    pub const SPACE: usize = 8 + 32 + 32 + 1;
+}
+
 /// Denomination-specific pool state — PDA seeded by `[b"pool", denomination_le]`.
 ///
 /// `encrypted_balance` holds the running total of all deposited-minus-withdrawn
@@ -1170,6 +1453,17 @@ impl NullifierRegistryState {
     pub const SPACE: usize = 8 + (NULLIFIER_REGISTRY_WORDS * 32) + 16 + 32 + 1;
 }
 
+#[account]
+pub struct NullifierRecord {
+    pub nullifier_hash: [u8; 32],
+    pub spent: bool,
+    pub bump: u8,
+}
+
+impl NullifierRecord {
+    pub const SPACE: usize = 8 + 32 + 1 + 1;
+}
+
 /// Per-transfer note — PDA seeded by `[b"note", note_hash]`.
 ///
 /// Lifecycle: `PendingMpc` → `Ready` → `Withdrawn` (transient) → closed
@@ -1188,11 +1482,18 @@ pub struct NoteAccount {
     pub note_hash:             [u8; 32],
     /// Current lifecycle status of this note.
     pub status:                NoteStatus,
+    /// Original sender. Used to authorize refunds when a deposit callback fails
+    /// before encrypted pool balance is credited.
+    pub sender:                Pubkey,
     /// `SHA256(withdraw_key ∥ recipient_pubkey)` — hides the recipient until
     /// withdrawal. The withdraw_key is a separate random value from note_secret,
     /// ensuring that on-chain recipient verification reveals nothing about the
     /// note secret or deposit linkage.
     pub recipient_hash:        [u8; 32],
+    /// Public nullifier commitment derived from note_secret. Persisted outside
+    /// the encrypted registry so replay protection survives note closure and
+    /// nullifier-registry compaction.
+    pub nullifier_hash:        [u8; 32],
     /// `Enc<Mxe, u64>` — this note's encrypted amount. Set by deposit_callback.
     pub encrypted_amount:      [u8; 32],
     /// `Enc<Mxe, u128>` — lower 128 bits of the note secret, encrypted for MXE.
@@ -1207,6 +1508,9 @@ pub struct NoteAccount {
     pub encrypted_pool_at_deposit: [u8; 32],
     /// Nonce for all `Enc<Mxe>` ciphertexts from the deposit callback output.
     pub amount_nonce:          u128,
+    /// Tracks whether the deposit callback successfully credited the encrypted
+    /// pool balance. Refunds are only allowed while this remains false.
+    pub pool_credit_applied:   bool,
     /// Plaintext lamport amount for the SOL transfer. Set during deposit (when
     /// the amount is already visible in the SOL CPI). Read by the withdraw
     /// callback to execute the `vault → recipient` transfer.
@@ -1216,7 +1520,7 @@ pub struct NoteAccount {
 }
 
 impl NoteAccount {
-    pub const SPACE: usize = 8 + 32 + 1 + 32 + 32 + 32 + 32 + 32 + 16 + 8 + 1;
+    pub const SPACE: usize = 8 + 32 + 1 + 32 + 32 + 32 + 32 + 32 + 32 + 32 + 16 + 1 + 8 + 1;
 }
 
 /// Note lifecycle status while the note account exists on-chain.
@@ -1239,6 +1543,8 @@ pub enum NoteStatus {
 #[event] pub struct PoolInitializedEvent   { pub pool: Pubkey }
 #[event] pub struct DepositQueuedEvent     { pub pool: Pubkey, pub computation_offset: u64 }
 #[event] pub struct DepositConfirmedEvent  { pub pool: Pubkey }
+#[event] pub struct DepositFailedEvent     { pub pool: Pubkey }
+#[event] pub struct FailedDepositRefundedEvent { pub pool: Pubkey }
 #[event] pub struct WithdrawQueuedEvent    { pub pool: Pubkey, pub computation_offset: u64 }
 #[event] pub struct WithdrawCompleteEvent  { pub pool: Pubkey }
 #[event] pub struct WithdrawRejectedEvent  { pub pool: Pubkey, pub reason_code: u8 }
@@ -1253,6 +1559,7 @@ pub enum NoteStatus {
 pub enum ErrorCode {
     #[msg("Pool not initialised — call init_pool first")]           PoolNotInitialized,
     #[msg("Note not in Ready status")]                              NoteNotReady,
+    #[msg("Note is not in Failed status")]                          NoteNotFailed,
     #[msg("Note is not in Withdrawn status")]                       NoteNotWithdrawn,
     #[msg("Note amount has not been cleared yet")]                  NoteAmountNotCleared,
     #[msg("Recipient does not match note")]                         RecipientMismatch,
@@ -1264,4 +1571,14 @@ pub enum ErrorCode {
     #[msg("Unexpected nullifier registry ciphertext shape")]        InvalidNullifierRegistryOutput,
     #[msg("Unexpected withdraw status code from MPC output")]       InvalidWithdrawStatusCode,
     #[msg("Off-chain circuit override requires both source URL and 32-byte hash")] InvalidCircuitSourceOverride,
+    #[msg("Protocol authority must not be the default pubkey")]     InvalidAuthority,
+    #[msg("Only the protocol admin may perform this action")]       UnauthorizedProtocolAdmin,
+    #[msg("Only the maintenance authority may perform this action")] UnauthorizedMaintenanceAuthority,
+    #[msg("Nullifier has already been spent")]                      NullifierAlreadySpent,
+    #[msg("Nullifier record does not match the provided note data")] InvalidNullifierRecord,
+    #[msg("Nullifier hash must not be zero")]                       InvalidNullifierHash,
+    #[msg("Only the original sender may refund this failed deposit")] UnauthorizedRefundRecipient,
+    #[msg("The deposit has already been credited to the encrypted pool balance")] DepositAlreadyApplied,
+    #[msg("No refundable lamports remain on this note")]            NoRefundableLamports,
+    #[msg("Pool is already initialized — cannot close")]            PoolAlreadyInitialized,
 }

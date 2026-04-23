@@ -1,16 +1,20 @@
 {
   "name": "lowkie-pool",
+  "private": true,
   "version": "1.0.0",
   "scripts": {
     "test": "ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts",
     "typecheck": "tsc --noEmit",
     "ci:check": "yarn -s typecheck",
-    "local:validate": "ts-node scripts/local-validate.ts",
-    "bootstrap:program": "ts-node scripts/bootstrap-program.ts",
-    "frontend": "ts-node scripts/frontend-server.ts",
+    "bootstrap:program": "ts-node apps/backend/scripts/bootstrap-program.ts",
+    "check:pool": "ts-node apps/backend/scripts/check-pool.ts",
+    "local:validate": "ts-node apps/backend/scripts/local-validate.ts",
+    "backend": "yarn --cwd apps/backend start",
+    "test-frontend": "yarn --cwd apps/test-frontend start",
+    "sdk:typecheck": "yarn --cwd packages/lowkie-sdk typecheck",
     "devnet:test": "arcium test --cluster devnet",
-    "send": "ts-node client/send.ts",
-    "relay": "ts-node client/relayer.ts"
+    "send": "ts-node apps/backend/src/core/send.ts",
+    "relay": "ts-node apps/backend/src/core/relayer.ts"
   },
   "dependencies": {
     "@arcium-hq/client": "^0.9.5",
