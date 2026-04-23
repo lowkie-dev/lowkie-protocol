@@ -8,6 +8,7 @@ COPY apps/backend/yarn.lock ./yarn.lock
 RUN yarn install --frozen-lockfile
 
 COPY apps/backend ./
+COPY target/idl/lowkie_pool.json /target/idl/lowkie_pool.json
 
 ENV NODE_ENV=production
 ENV HOST=0.0.0.0
