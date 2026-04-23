@@ -5,11 +5,6 @@
 node_modules
 **/node_modules
 target
-!target/
-target/*
-!target/idl/
-target/idl/*
-!target/idl/lowkie_pool.json
 build
 artifacts
 recovery

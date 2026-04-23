@@ -39,7 +39,7 @@ export interface LowkieProgramContext extends LowkieProgramRuntimeConfig {
 
 const DEFAULT_IDL_PATH = path.resolve(
   __dirname,
-  "../../../../target/idl/lowkie_pool.json",
+  "../../idl/lowkie_pool.json",
 );
 const DEFAULT_RPC_HTTP_TIMEOUT_MS = 30_000;
 
