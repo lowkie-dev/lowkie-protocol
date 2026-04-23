@@ -39,9 +39,9 @@ import {
   redactValue,
 } from "./src/core/privacyLogging";
 import {
-  readKeypair,
+  resolveKeypairFromEnv,
+  resolveOptionalKeypairFromEnv,
   resolveOptionalPathFromEnv,
-  resolvePathFromEnv,
 } from "./src/core/utils";
 import {
   createFixedWindowRateLimiter,
@@ -94,16 +94,14 @@ function resolveSenderWalletInfo(): {
   senderWalletError?: string;
   keypair?: Keypair;
 } {
-  const senderWalletPath = resolvePathFromEnv(
-    "SENDER_WALLET",
-    DEFAULT_WALLET_PATH,
-  );
-  const senderWalletSource = resolveOptionalPathFromEnv("SENDER_WALLET")
-    ? "env"
-    : "default";
+  const configuredSender = resolveOptionalKeypairFromEnv("SENDER_WALLET");
+  const senderWalletSource = configuredSender ? "env" : "default";
 
   try {
-    const keypair = readKeypair(senderWalletPath);
+    const keypair = resolveKeypairFromEnv(
+      "SENDER_WALLET",
+      DEFAULT_WALLET_PATH,
+    ).keypair;
     return {
       senderWalletConfigured: true,
       senderWalletAddress: keypair.publicKey.toBase58(),
@@ -126,8 +124,8 @@ function resolveRelayerWalletInfo(): {
   relayerWalletAddress: string | null;
   relayerWalletError?: string;
 } {
-  const relayerPath = resolveOptionalPathFromEnv("RELAYER_KEYPAIR_PATH");
-  if (!relayerPath) {
+  const relayerResolution = resolveOptionalKeypairFromEnv("RELAYER_KEYPAIR_PATH");
+  if (!relayerResolution) {
     return {
       relayerWalletConfigured: false,
       relayerWalletAddress: null,
@@ -136,7 +134,7 @@ function resolveRelayerWalletInfo(): {
   }
 
   try {
-    const keypair = readKeypair(relayerPath);
+    const keypair = relayerResolution.keypair;
     return {
       relayerWalletConfigured: true,
       relayerWalletAddress: keypair.publicKey.toBase58(),
@@ -218,12 +216,10 @@ async function resolveHealthPayload(): Promise<Record<string, unknown>> {
     const { rpcUrl, programId, configuredClusterOffset } =
       loadLowkieProgramRuntimeConfig();
     const connection = createAnchorConnection(rpcUrl);
-    const anchorWalletPath = resolveOptionalPathFromEnv("ANCHOR_WALLET");
     const wallet = senderWalletInfo.keypair
       ? senderWalletInfo.keypair
-      : anchorWalletPath
-        ? readKeypair(anchorWalletPath)
-        : Keypair.generate();
+      : (resolveOptionalKeypairFromEnv("ANCHOR_WALLET")?.keypair ??
+        Keypair.generate());
     const provider = createAnchorProvider(connection, wallet);
     const program = loadLowkieProgram(provider, programId);
     const clusterOffset = configuredClusterOffset ?? -1;
@@ -302,8 +298,9 @@ fastify.get("/api/pool/status", async (request, reply) => {
   try {
     const { rpcUrl, programId } = loadLowkieProgramRuntimeConfig();
     const connection = createAnchorConnection(rpcUrl);
-    const walletPath = resolveOptionalPathFromEnv("ANCHOR_WALLET");
-    const wallet = walletPath ? readKeypair(walletPath) : Keypair.generate();
+    const wallet =
+      resolveOptionalKeypairFromEnv("ANCHOR_WALLET")?.keypair ??
+      Keypair.generate();
     const provider = createAnchorProvider(connection, wallet);
     const program = loadLowkieProgram(provider, programId);
     const issues: string[] = [];

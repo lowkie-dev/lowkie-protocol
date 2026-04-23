@@ -11,7 +11,7 @@ import {
   resolveRpcUrl,
 } from "./constants";
 import { RuntimeSafetyConfig, assertRuntimeSafety } from "./runtimeSafety";
-import { readKeypair, resolvePathFromEnv } from "./utils";
+import { resolveKeypairFromEnv } from "./utils";
 
 export interface LowkieRpcRuntimeConfig {
   rpcUrl: string;
@@ -99,10 +99,14 @@ export function loadAnchorWalletContext(
   fallbackPath = DEFAULT_WALLET_PATH,
   env: NodeJS.ProcessEnv = process.env,
 ): LowkieWalletContext {
-  const walletPath = resolvePathFromEnv(walletEnvKey, fallbackPath, env);
+  const { keypair, source } = resolveKeypairFromEnv(
+    walletEnvKey,
+    fallbackPath,
+    env,
+  );
   return {
-    walletPath,
-    walletKeypair: readKeypair(walletPath),
+    walletPath: source,
+    walletKeypair: keypair,
   };
 }
 

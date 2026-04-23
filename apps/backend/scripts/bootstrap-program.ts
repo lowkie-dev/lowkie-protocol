@@ -40,6 +40,7 @@ import {
   confirmedRpcOptions,
   fetchMXEKey,
   readKeypair,
+  resolveOptionalKeypairFromEnv,
   resolveOptionalPathFromEnv,
   resolvePathFromEnv,
 } from "../src/core/utils";
@@ -518,12 +519,8 @@ async function main(): Promise<void> {
     provider,
     program,
   } = loadLowkieProgramContext();
-  const maintenanceWalletPath = resolveOptionalPathFromEnv(
-    "RELAYER_KEYPAIR_PATH",
-  );
-  const maintenanceWallet = maintenanceWalletPath
-    ? readKeypair(maintenanceWalletPath)
-    : wallet;
+  const maintenanceWallet =
+    resolveOptionalKeypairFromEnv("RELAYER_KEYPAIR_PATH")?.keypair ?? wallet;
   anchor.setProvider(provider);
   const arciumEnv = getArciumEnv();
   const clusterOffset =

@@ -44,8 +44,9 @@ import {
   confirmedRpcOptions,
   readKeypair,
   envBool,
+  resolveKeypairFromEnv,
+  resolveOptionalKeypairFromEnv,
   resolveOptionalPathFromEnv,
-  resolvePathFromEnv,
   computeNullifierHash,
   computeNoteHash,
   splitSecretToU128,
@@ -255,7 +256,9 @@ export async function lowkieWithdraw(p: WithdrawParams) {
   const relayerPath =
     p.relayerKeypairPath ?? resolveOptionalPathFromEnv("RELAYER_KEYPAIR_PATH");
   const relayerKp =
-    p.relayerKeypair ?? (relayerPath ? readKeypair(relayerPath) : undefined);
+    p.relayerKeypair ??
+    resolveOptionalKeypairFromEnv("RELAYER_KEYPAIR_PATH")?.keypair ??
+    (relayerPath ? readKeypair(relayerPath) : undefined);
   if (!relayerKp) {
     throw new Error(
       "RELAYER_KEYPAIR_PATH is required for withdraw. Use a dedicated relayer keypair.",
@@ -518,12 +521,12 @@ export async function executeRelayRequest(
   request: RelayRequest,
 ): Promise<RelayResult> {
   const parsed = parseRelayRequest(request);
-  const relayerPath = resolveOptionalPathFromEnv("RELAYER_KEYPAIR_PATH");
-  if (!relayerPath) {
+  const relayerResolution = resolveOptionalKeypairFromEnv("RELAYER_KEYPAIR_PATH");
+  if (!relayerResolution) {
     throw new Error("RELAYER_KEYPAIR_PATH is required for relay execution.");
   }
 
-  const relayerKp = readKeypair(relayerPath);
+  const relayerKp = relayerResolution.keypair;
   if (parsed.sender) {
     if (parsed.sender.equals(relayerKp.publicKey)) {
       throw new Error(
@@ -556,7 +559,7 @@ export async function executeRelayRequest(
       configuredClusterOffset ??
       parsed.clusterOffset ??
       getArciumEnv().arciumClusterOffset,
-    relayerKeypairPath: relayerPath,
+    relayerKeypairPath: relayerResolution.source,
     relayerKeypair: relayerKp,
   });
 }
@@ -586,8 +589,7 @@ if (require.main === module) {
   }
 
   const n = JSON.parse(fs.readFileSync(f, "utf-8"));
-  const relayerPath = resolvePathFromEnv("RELAYER_KEYPAIR_PATH");
-  const relayerKp = readKeypair(relayerPath);
+  const { keypair: relayerKp } = resolveKeypairFromEnv("RELAYER_KEYPAIR_PATH");
 
   if (n.sender && typeof n.sender === "string") {
     const sender = new PublicKey(n.sender);

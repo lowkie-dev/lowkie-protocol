@@ -5,6 +5,7 @@
  * Extracted to reduce duplication and improve maintainability.
  */
 import * as anchor from "@coral-xyz/anchor";
+import bs58 from "bs58";
 import { Keypair, LAMPORTS_PER_SOL, PublicKey } from "@solana/web3.js";
 import { getMXEPublicKey } from "@arcium-hq/client";
 import { createHash } from "crypto";
@@ -62,6 +63,85 @@ export function readKeypair(filePath: string): Keypair {
   }
   const raw = JSON.parse(fs.readFileSync(resolved).toString());
   return Keypair.fromSecretKey(new Uint8Array(raw));
+}
+
+function parseSecretKeyMaterial(raw: string, source: string): Uint8Array {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    throw new Error(`Keypair secret is empty for ${source}`);
+  }
+
+  if (trimmed.startsWith("[")) {
+    const parsed = JSON.parse(trimmed);
+    if (!Array.isArray(parsed) || parsed.some((value) => !Number.isInteger(value))) {
+      throw new Error(`Keypair JSON must be an array of integers for ${source}`);
+    }
+    return new Uint8Array(parsed);
+  }
+
+  return bs58.decode(trimmed);
+}
+
+function resolveKeypairEnvAliases(envKey: string): string[] {
+  const aliases = new Set<string>([envKey]);
+  if (envKey.endsWith("_PATH")) {
+    aliases.add(envKey.slice(0, -5));
+  }
+  return Array.from(aliases);
+}
+
+export function resolveOptionalKeypairFromEnv(
+  envKey: string,
+  env: NodeJS.ProcessEnv = process.env,
+): { keypair: Keypair; source: string } | undefined {
+  for (const alias of resolveKeypairEnvAliases(envKey)) {
+    const jsonValue = env[`${alias}_JSON`]?.trim();
+    if (jsonValue) {
+      return {
+        keypair: Keypair.fromSecretKey(
+          parseSecretKeyMaterial(jsonValue, `${alias}_JSON`),
+        ),
+        source: `${alias}_JSON`,
+      };
+    }
+
+    const base58Value = env[`${alias}_BASE58`]?.trim();
+    if (base58Value) {
+      return {
+        keypair: Keypair.fromSecretKey(
+          parseSecretKeyMaterial(base58Value, `${alias}_BASE58`),
+        ),
+        source: `${alias}_BASE58`,
+      };
+    }
+  }
+
+  const configuredPath = resolveOptionalPathFromEnv(envKey, env);
+  if (!configuredPath) {
+    return undefined;
+  }
+
+  return {
+    keypair: readKeypair(configuredPath),
+    source: configuredPath,
+  };
+}
+
+export function resolveKeypairFromEnv(
+  envKey: string,
+  fallback = DEFAULT_WALLET_PATH,
+  env: NodeJS.ProcessEnv = process.env,
+): { keypair: Keypair; source: string } {
+  const resolved = resolveOptionalKeypairFromEnv(envKey, env);
+  if (resolved) {
+    return resolved;
+  }
+
+  const fallbackPath = expandHomePath(fallback);
+  return {
+    keypair: readKeypair(fallbackPath),
+    source: fallbackPath,
+  };
 }
 
 export async function assertRpcHealth(

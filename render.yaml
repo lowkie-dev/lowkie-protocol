@@ -20,7 +20,11 @@ services:
         sync: false
       - key: LOWKIE_PROGRAM_ID
         sync: false
-      - key: RELAYER_KEYPAIR_PATH
+      - key: ANCHOR_WALLET_JSON
+        sync: false
+      - key: SENDER_WALLET_JSON
+        sync: false
+      - key: RELAYER_KEYPAIR_JSON
         sync: false
       - key: LOWKIE_REQUIRE_API_AUTH
         value: "true"

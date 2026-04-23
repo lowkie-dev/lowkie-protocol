@@ -18,10 +18,10 @@ import {
 } from "./programContext";
 import { assertLowkieReadiness } from "./readiness";
 import {
-  readKeypair,
   assertDistinctKeypairs,
+  resolveKeypairFromEnv,
+  resolveOptionalKeypairFromEnv,
   resolveOptionalPathFromEnv,
-  resolvePathFromEnv,
   decomposeIntoDenominations,
 } from "./utils";
 import {
@@ -124,7 +124,7 @@ function resolveRecoverySenderKeypair(
   expectedSender: string,
 ): anchor.web3.Keypair | undefined {
   try {
-    const senderKp = readKeypair(resolvePathFromEnv("SENDER_WALLET"));
+    const senderKp = resolveKeypairFromEnv("SENDER_WALLET").keypair;
     if (senderKp.publicKey.toBase58() === expectedSender) {
       return senderKp;
     }
@@ -257,17 +257,17 @@ export async function lowkieSend(
   amountSol: number,
   delayMs = DEFAULT_RELAYER_DELAY_MS,
 ): Promise<SendResult> {
-  const senderKp = readKeypair(resolvePathFromEnv("SENDER_WALLET"));
+  const senderKp = resolveKeypairFromEnv("SENDER_WALLET").keypair;
 
-  const relayerPath = process.env.RELAYER_KEYPAIR_PATH;
-  if (!resolveRemoteRelayerConfig() && !relayerPath) {
+  const relayerResolution = resolveOptionalKeypairFromEnv("RELAYER_KEYPAIR_PATH");
+  if (!resolveRemoteRelayerConfig() && !relayerResolution) {
     throw new Error(
       "RELAYER_KEYPAIR_PATH is required when LOWKIE_RELAYER_URL is not configured.",
     );
   }
 
-  if (relayerPath) {
-    const relayerKp = readKeypair(relayerPath);
+  if (relayerResolution) {
+    const relayerKp = relayerResolution.keypair;
     assertDistinctKeypairs(senderKp, relayerKp);
   }
 

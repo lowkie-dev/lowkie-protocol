@@ -33,9 +33,9 @@ import {
   loadLowkieProgramRuntimeConfig,
 } from "./programContext";
 import {
-  readKeypair,
+  resolveKeypairFromEnv,
+  resolveOptionalKeypairFromEnv,
   resolveOptionalPathFromEnv,
-  resolvePathFromEnv,
   computeNullifierHash,
 } from "./utils";
 import { buildRelayRequest } from "./relayProtocol";
@@ -107,16 +107,17 @@ export async function recoverWithdrawal(
   const inspectorWalletPath =
     resolveOptionalPathFromEnv("ANCHOR_WALLET") ??
     resolveOptionalPathFromEnv("SENDER_WALLET");
-  const inspectorWallet = inspectorWalletPath
-    ? readKeypair(inspectorWalletPath)
-    : Keypair.generate();
+  const inspectorWallet =
+    resolveOptionalKeypairFromEnv("ANCHOR_WALLET")?.keypair ??
+    resolveOptionalKeypairFromEnv("SENDER_WALLET")?.keypair ??
+    (inspectorWalletPath ? resolveKeypairFromEnv("ANCHOR_WALLET").keypair : Keypair.generate());
   const inspectorProvider = createAnchorProvider(conn, inspectorWallet);
   const program = loadLowkieProgram(inspectorProvider, programId) as Program<any>;
   const remoteRelayerConfig = resolveRemoteRelayerConfig();
-  const relayerPath = remoteRelayerConfig
+  const relayerResolution = remoteRelayerConfig
     ? undefined
-    : resolveOptionalPathFromEnv("RELAYER_KEYPAIR_PATH");
-  const relayerKp = relayerPath ? readKeypair(relayerPath) : undefined;
+    : resolveOptionalKeypairFromEnv("RELAYER_KEYPAIR_PATH");
+  const relayerKp = relayerResolution?.keypair;
   const relayerProvider = relayerKp
     ? createAnchorProvider(conn, relayerKp)
     : undefined;
@@ -194,7 +195,7 @@ export async function recoverWithdrawal(
           remoteRelayerConfig,
         );
       } else {
-        if (!relayerProvider || !relayerProgram || !relayerKp || !relayerPath) {
+        if (!relayerProvider || !relayerProgram || !relayerKp || !relayerResolution) {
           throw new Error(
             "RELAYER_KEYPAIR_PATH is required for local recovery withdrawal.",
           );
@@ -207,7 +208,7 @@ export async function recoverWithdrawal(
           provider: relayerProvider,
           program: relayerProgram,
           clusterOffset,
-          relayerKeypairPath: relayerPath,
+          relayerKeypairPath: relayerResolution.source,
           relayerKeypair: relayerKp,
         });
       }
@@ -247,7 +248,7 @@ export async function recoverRefund(
   const config = loadLowkieProgramRuntimeConfig();
   const conn = createAnchorConnection(data.rpcUrl || config.rpcUrl);
   const programId = new PublicKey(data.programId || config.programId.toBase58());
-  const senderKp = readKeypair(resolvePathFromEnv("SENDER_WALLET"));
+  const senderKp = resolveKeypairFromEnv("SENDER_WALLET").keypair;
   const provider = createAnchorProvider(conn, senderKp);
   const program = loadLowkieProgram(provider, programId) as Program<any>;
 
