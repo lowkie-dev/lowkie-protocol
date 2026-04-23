@@ -2,9 +2,26 @@
   "name": "@lowkie/sdk",
   "version": "0.1.0",
   "description": "TypeScript SDK for the Lowkie privacy pool protocol",
+  "keywords": [
+    "solana",
+    "anchor",
+    "arcium",
+    "privacy",
+    "sdk",
+    "lowkie"
+  ],
   "license": "MIT",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lowkie-dev/lowkie-protocol.git",
+    "directory": "packages/lowkie-sdk"
+  },
+  "homepage": "https://github.com/lowkie-dev/lowkie-protocol/tree/security/packages/lowkie-sdk",
+  "bugs": {
+    "url": "https://github.com/lowkie-dev/lowkie-protocol/issues"
+  },
   "files": [
     "dist"
   ],

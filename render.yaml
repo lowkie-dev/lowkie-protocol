@@ -1,0 +1,36 @@
+services:
+  - type: web
+    name: lowkie-backend
+    env: node
+    rootDir: .
+    plan: starter
+    buildCommand: yarn install --frozen-lockfile && yarn --cwd apps/backend install --frozen-lockfile && yarn --cwd apps/backend typecheck
+    startCommand: yarn --cwd apps/backend start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: 20.18.0
+      - key: HOST
+        value: 0.0.0.0
+      - key: PORT
+        generateValue: true
+      - key: ANCHOR_PROVIDER_URL
+        sync: false
+      - key: ARCIUM_CLUSTER_OFFSET
+        sync: false
+      - key: LOWKIE_PROGRAM_ID
+        sync: false
+      - key: RELAYER_KEYPAIR_PATH
+        sync: false
+      - key: LOWKIE_REQUIRE_API_AUTH
+        value: "true"
+      - key: LOWKIE_API_AUTH_TOKEN
+        sync: false
+      - key: LOWKIE_ALLOWED_ORIGINS
+        sync: false
+      - key: LOWKIE_RPC_HTTP_TIMEOUT_MS
+        value: "30000"
+      - key: LOWKIE_MAX_REQUEST_BODY_BYTES
+        value: "262144"
+      - key: LOWKIE_OPERATOR_COMPACT_REGISTRY
+        value: "false"
