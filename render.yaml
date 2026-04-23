@@ -1,11 +1,11 @@
 services:
   - type: web
     name: lowkie-backend
-    env: node
+    env: docker
     rootDir: .
     plan: starter
-    buildCommand: yarn install --frozen-lockfile && yarn --cwd apps/backend install --frozen-lockfile && yarn --cwd apps/backend typecheck
-    startCommand: yarn --cwd apps/backend start
+    dockerfilePath: ./apps/backend/Dockerfile
+    dockerContext: .
     healthCheckPath: /api/health
     envVars:
       - key: NODE_VERSION

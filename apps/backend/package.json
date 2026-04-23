@@ -2,8 +2,8 @@
   "name": "lowkie-backend",
   "private": true,
   "scripts": {
-    "start": "node ../../node_modules/ts-node/dist/bin.js --project tsconfig.json server.ts",
-    "typecheck": "node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json"
+    "start": "ts-node --project tsconfig.json server.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
     "@arcium-hq/client": "^0.9.5",

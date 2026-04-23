@@ -10,7 +10,13 @@ yarn --cwd apps/backend start
 
 ## Render
 
-This repository includes a root `render.yaml` blueprint for deploying the backend as a Render web service.
+This repository includes a root `render.yaml` blueprint for deploying the backend as a Docker-based Render web service.
+
+Why Docker instead of PM2:
+
+- Render already manages process restarts and logs.
+- Docker makes the backend runtime reproducible.
+- The backend can install and run from its own package boundary without relying on root workspace tooling.
 
 Required environment variables:
 
