@@ -90,6 +90,16 @@ function resolveKeypairEnvAliases(envKey: string): string[] {
   return Array.from(aliases);
 }
 
+function isLikelyFilePath(value: string): boolean {
+  return (
+    value.startsWith("~/") ||
+    value.startsWith("./") ||
+    value.startsWith("../") ||
+    value.includes("/") ||
+    value.includes("\\")
+  );
+}
+
 export function resolveOptionalKeypairFromEnv(
   envKey: string,
   env: NodeJS.ProcessEnv = process.env,
@@ -116,14 +126,35 @@ export function resolveOptionalKeypairFromEnv(
     }
   }
 
-  const configuredPath = resolveOptionalPathFromEnv(envKey, env);
-  if (!configuredPath) {
+  const directValue = env[envKey]?.trim();
+  if (!directValue) {
     return undefined;
   }
 
+  if (directValue.startsWith("[")) {
+    return {
+      keypair: Keypair.fromSecretKey(
+        parseSecretKeyMaterial(directValue, envKey),
+      ),
+      source: envKey,
+    };
+  }
+
+  const configuredPath = expandHomePath(directValue);
+  if (fs.existsSync(configuredPath)) {
+    return {
+      keypair: readKeypair(configuredPath),
+      source: configuredPath,
+    };
+  }
+
+  if (isLikelyFilePath(directValue)) {
+    throw new Error(`Keypair file not found: ${configuredPath}`);
+  }
+
   return {
-    keypair: readKeypair(configuredPath),
-    source: configuredPath,
+    keypair: Keypair.fromSecretKey(parseSecretKeyMaterial(directValue, envKey)),
+    source: envKey,
   };
 }
 
