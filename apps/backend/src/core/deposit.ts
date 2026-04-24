@@ -1,6 +1,7 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { PublicKey } from "@solana/web3.js";
+import bs58 from "bs58";
 import {
   awaitComputationFinalization,
   deserializeLE,
@@ -94,6 +95,19 @@ export interface DepositPhaseResult {
   subNotes: DepositedSubNote[];
   depositReceipts: DepositReceipt[];
   depositFailure: Error | null;
+}
+
+function extractSignedTransactionSignature(txBuffer: Buffer): string | null {
+  try {
+    const tx = anchor.web3.VersionedTransaction.deserialize(txBuffer);
+    const [signature] = tx.signatures;
+    if (!signature || signature.every((byte) => byte === 0)) {
+      return null;
+    }
+    return bs58.encode(signature);
+  } catch {
+    return null;
+  }
 }
 
 async function refundFailedDeposit(
@@ -408,6 +422,18 @@ export async function executeSignedDeposits(
           console.warn(
             "   ⚠️ Transaction blockhash expired before submission; refreshed and re-signed with a new blockhash.",
           );
+        }
+
+        if (/already been processed/i.test(errorMessage) && !depositSig) {
+          const existingSig = extractSignedTransactionSignature(txBuffer);
+          if (existingSig) {
+            depositSig = existingSig;
+            note.depositSig = existingSig;
+            writeRecoveryFile(recoveryData);
+            console.warn(
+              "   ⚠️ Transaction was already processed on-chain; resuming from the signed transaction signature.",
+            );
+          }
         }
 
         if (depositSig && /unknown action/i.test(errorMessage)) {
