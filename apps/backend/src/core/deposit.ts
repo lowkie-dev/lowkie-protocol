@@ -37,7 +37,7 @@ import {
 } from "./recoveryStore";
 
 const DEPOSIT_SPREAD_DELAY_MS = parseInt(
-  process.env.DEPOSIT_SPREAD_DELAY_MS ?? process.env.SPLIT_DELAY_MS ?? "2000",
+  process.env.DEPOSIT_SPREAD_DELAY_MS ?? process.env.SPLIT_DELAY_MS ?? "0",
 );
 const DEPOSIT_MAX_RETRIES = parseInt(process.env.DEPOSIT_MAX_RETRIES ?? "3");
 const DEPOSIT_RETRY_BASE_MS = parseInt(
@@ -353,11 +353,12 @@ export async function executeSignedDeposits(
     notePDA: new PublicKey(note.notePda),
   }));
 
+  const submittedIndexes: number[] = [];
+
   for (let index = 0; index < signedTransactionsBase64.length; index++) {
     const txBase64 = signedTransactionsBase64[index];
     let txBuffer = Buffer.from(txBase64, "base64");
     const note = recoveryData.notes[index];
-    const notePDA = new PublicKey(note.notePda);
     const subAmount = BigInt(note.denominationLamports);
 
     console.log(
@@ -365,7 +366,6 @@ export async function executeSignedDeposits(
     );
 
     let depositSig = note.depositSig;
-    let noteAfterDeposit: any;
 
     for (let attempt = 0; attempt <= DEPOSIT_MAX_RETRIES; attempt++) {
       try {
@@ -387,18 +387,6 @@ export async function executeSignedDeposits(
           writeRecoveryFile(recoveryData);
           console.log(`   ✅ Tx: ${depositSig}`);
         }
-
-        console.log("   ⏳ Waiting for MPC...");
-        await awaitComputationFinalization(
-          provider,
-          new anchor.BN(note.offsetHex, "hex"),
-          programId,
-          "confirmed",
-        );
-
-        noteAfterDeposit = await (program.account as any).noteAccount.fetch(
-          notePDA,
-        );
         break;
       } catch (retryError) {
         const isLastAttempt = attempt === DEPOSIT_MAX_RETRIES;
@@ -432,6 +420,10 @@ export async function executeSignedDeposits(
             console.error(
               "   💡 Set DEPOSIT_SPREAD_DELAY_MS=0 or rebuild deposits individually to avoid this issue.",
             );
+            depositFailure = new Error(
+              "Blockhash expired and sender keypair is unavailable for re-signing. Rebuild and re-sign the remaining deposits.",
+            );
+            break;
           }
         }
 
@@ -463,12 +455,14 @@ export async function executeSignedDeposits(
           }
         }
 
-        if (isLastAttempt) {
+        if (isLastAttempt || depositFailure) {
           console.error(
             `   ❌ Deposit ${index + 1} failed after ${DEPOSIT_MAX_RETRIES + 1} attempts: ${errorMessage}`,
           );
-          depositFailure =
-            retryError instanceof Error ? retryError : new Error(errorMessage);
+          if (!depositFailure) {
+            depositFailure =
+              retryError instanceof Error ? retryError : new Error(errorMessage);
+          }
           break;
         }
 
@@ -479,6 +473,42 @@ export async function executeSignedDeposits(
     if (depositFailure) {
       break;
     }
+
+    submittedIndexes.push(index);
+
+    if (
+      index < signedTransactionsBase64.length - 1 &&
+      DEPOSIT_SPREAD_DELAY_MS > 0
+    ) {
+      console.log(
+        `   ⏱️  Waiting ${DEPOSIT_SPREAD_DELAY_MS}ms before next deposit...`,
+      );
+      await new Promise((resolve) =>
+        setTimeout(resolve, DEPOSIT_SPREAD_DELAY_MS),
+      );
+    }
+  }
+
+  for (const index of submittedIndexes) {
+    const note = recoveryData.notes[index];
+    const notePDA = new PublicKey(note.notePda);
+    const subAmount = BigInt(note.denominationLamports);
+    const depositSig = note.depositSig;
+
+    console.log(
+      `   ⏳ Waiting for MPC result for deposit ${index + 1}/${signedTransactionsBase64.length}...`,
+    );
+
+    await awaitComputationFinalization(
+      provider,
+      new anchor.BN(note.offsetHex, "hex"),
+      programId,
+      "confirmed",
+    );
+
+    const noteAfterDeposit = await (program.account as any).noteAccount.fetch(
+      notePDA,
+    );
 
     const noteStatus = noteAfterDeposit.status as Record<string, unknown>;
     if (noteStatus.failed) {
@@ -526,18 +556,6 @@ export async function executeSignedDeposits(
       denominationLamports: subAmount.toString(),
       depositSig: depositSig!,
     });
-
-    if (
-      index < signedTransactionsBase64.length - 1 &&
-      DEPOSIT_SPREAD_DELAY_MS > 0
-    ) {
-      console.log(
-        `   ⏱️  Waiting ${DEPOSIT_SPREAD_DELAY_MS}ms before next deposit...`,
-      );
-      await new Promise((resolve) =>
-        setTimeout(resolve, DEPOSIT_SPREAD_DELAY_MS),
-      );
-    }
   }
 
   if (depositReceipts.length === 0 && depositFailure) {
