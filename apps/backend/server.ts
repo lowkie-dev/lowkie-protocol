@@ -712,7 +712,7 @@ const start = async () => {
     await fastify.listen({ port: PORT, host: HOST });
     console.log(`Server listening on http://${HOST}:${PORT}`);
   } catch (err) {
-    fastify.log.error(err);
+    console.error("Server failed to start:", err);
     process.exit(1);
   }
 };

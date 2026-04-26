@@ -359,6 +359,7 @@ export async function executeSignedDeposits(
     const txBase64 = signedTransactionsBase64[index];
     let txBuffer = Buffer.from(txBase64, "base64");
     const note = recoveryData.notes[index];
+    const notePDA = new PublicKey(note.notePda);
     const subAmount = BigInt(note.denominationLamports);
 
     console.log(
