@@ -67,9 +67,9 @@ const HOST =
   "0.0.0.0";
 const PORT = Number(
   process.env.PORT ??
-  process.env.BACKEND_PORT ??
-  process.env.FRONTEND_PORT ??
-  "5174",
+    process.env.BACKEND_PORT ??
+    process.env.FRONTEND_PORT ??
+    "5174",
 );
 const {
   rpcUrl: RPC,
@@ -124,7 +124,9 @@ function resolveRelayerWalletInfo(): {
   relayerWalletAddress: string | null;
   relayerWalletError?: string;
 } {
-  const relayerResolution = resolveOptionalKeypairFromEnv("RELAYER_KEYPAIR_PATH");
+  const relayerResolution = resolveOptionalKeypairFromEnv(
+    "RELAYER_KEYPAIR_PATH",
+  );
   if (!relayerResolution) {
     return {
       relayerWalletConfigured: false,
@@ -353,12 +355,10 @@ fastify.register(async (instance) => {
     // 1. Auth Check
     const authHeader = request.headers.authorization;
     if (!isAuthorized(authHeader, SECURITY)) {
-      reply
-        .status(401)
-        .send({
-          success: false,
-          error: "Missing or invalid Authorization bearer token",
-        });
+      reply.status(401).send({
+        success: false,
+        error: "Missing or invalid Authorization bearer token",
+      });
       return reply;
     }
 
@@ -425,11 +425,9 @@ fastify.register(async (instance) => {
       }
 
       if (parsed.amountSol > SECURITY.maxAmountSol) {
-        reply
-          .status(400)
-          .send({
-            error: `amountSol exceeds LOWKIE_MAX_AMOUNT_SOL (${SECURITY.maxAmountSol})`,
-          });
+        reply.status(400).send({
+          error: `amountSol exceeds LOWKIE_MAX_AMOUNT_SOL (${SECURITY.maxAmountSol})`,
+        });
         return;
       }
 
@@ -443,11 +441,9 @@ fastify.register(async (instance) => {
         requestedDelayMs < SECURITY.minDelayMs ||
         requestedDelayMs > SECURITY.maxDelayMs
       ) {
-        reply
-          .status(400)
-          .send({
-            error: `delayMs must be between ${SECURITY.minDelayMs} and ${SECURITY.maxDelayMs}`,
-          });
+        reply.status(400).send({
+          error: `delayMs must be between ${SECURITY.minDelayMs} and ${SECURITY.maxDelayMs}`,
+        });
         return;
       }
 
@@ -556,12 +552,10 @@ fastify.register(async (instance) => {
 
   instance.post("/api/submit-deposits", async (request, reply) => {
     if (SECURITY.serializeSendRequests && sendInFlight) {
-      reply
-        .status(409)
-        .send({
-          success: false,
-          error: "Another transfer is already in progress.",
-        });
+      reply.status(409).send({
+        success: false,
+        error: "Another transfer is already in progress.",
+      });
       return;
     }
 
@@ -577,11 +571,9 @@ fastify.register(async (instance) => {
         !parsed.recoveryId ||
         !Array.isArray(parsed.signedTransactionsBase64)
       ) {
-        reply
-          .status(400)
-          .send({
-            error: "recoveryId and signedTransactionsBase64 array are required",
-          });
+        reply.status(400).send({
+          error: "recoveryId and signedTransactionsBase64 array are required",
+        });
         return;
       }
 
@@ -598,14 +590,13 @@ fastify.register(async (instance) => {
           "Withdrawal failed (deposits succeeded):",
           redactErrorMessage(error.message),
         );
-        reply
-          .status(502)
-          .send({
-            success: false,
-            error: "Withdrawal failed after successful deposit(s).",
-            recoveryId: error.recoveryId,
-            depositReceipts: error.depositReceipts,
-          });
+        reply.status(502).send({
+          success: false,
+          error: "Withdrawal failed after successful deposit(s).",
+          detailedError: redactErrorMessage(error.message),
+          recoveryId: error.recoveryId,
+          depositReceipts: error.depositReceipts,
+        });
       } else {
         const message = error instanceof Error ? error.message : String(error);
         console.error("Submit deposits error:", redactErrorMessage(message));
@@ -658,12 +649,10 @@ fastify.register(async (instance) => {
 
   instance.post("/api/relay", async (request, reply) => {
     if (SECURITY.serializeSendRequests && relayInFlight) {
-      reply
-        .status(409)
-        .send({
-          success: false,
-          error: "Another relay request is already in progress.",
-        });
+      reply.status(409).send({
+        success: false,
+        error: "Another relay request is already in progress.",
+      });
       return;
     }
 
