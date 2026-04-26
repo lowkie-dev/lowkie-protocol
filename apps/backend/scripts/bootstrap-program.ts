@@ -29,12 +29,8 @@ import {
   deriveVaultPda,
 } from "../src/core/arciumAccounts";
 import { LAMPORTS_PER_SOL } from "@solana/web3.js";
-import {
-  SUPPORTED_DENOMINATION_LAMPORTS,
-} from "../src/core/constants";
-import {
-  loadLowkieProgramContext,
-} from "../src/core/programContext";
+import { SUPPORTED_DENOMINATION_LAMPORTS } from "../src/core/constants";
+import { loadLowkieProgramContext } from "../src/core/programContext";
 import {
   assertRpcHealth,
   confirmedRpcOptions,
@@ -435,9 +431,7 @@ async function ensurePoolInitialized(
       `Pool ${describeDenomination(denominationLamports)} exists but is_initialized=false. Closing stuck PDAs...`,
     );
     await (program.methods as any)
-      .closeUninitializedPool(
-        new anchor.BN(denominationLamports.toString()),
-      )
+      .closeUninitializedPool(new anchor.BN(denominationLamports.toString()))
       .accounts({
         admin: wallet.publicKey,
         protocolConfig: protocolConfigPDA,

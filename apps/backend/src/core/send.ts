@@ -259,7 +259,9 @@ export async function lowkieSend(
 ): Promise<SendResult> {
   const senderKp = resolveKeypairFromEnv("SENDER_WALLET").keypair;
 
-  const relayerResolution = resolveOptionalKeypairFromEnv("RELAYER_KEYPAIR_PATH");
+  const relayerResolution = resolveOptionalKeypairFromEnv(
+    "RELAYER_KEYPAIR_PATH",
+  );
   if (!resolveRemoteRelayerConfig() && !relayerResolution) {
     throw new Error(
       "RELAYER_KEYPAIR_PATH is required when LOWKIE_RELAYER_URL is not configured.",

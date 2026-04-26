@@ -100,7 +100,9 @@ export async function recoverWithdrawal(
 
   const config = loadLowkieProgramRuntimeConfig();
   const conn = createAnchorConnection(data.rpcUrl || config.rpcUrl);
-  const programId = new PublicKey(data.programId || config.programId.toBase58());
+  const programId = new PublicKey(
+    data.programId || config.programId.toBase58(),
+  );
   const clusterOffset =
     data.clusterOffset ?? config.configuredClusterOffset ?? 0;
 
@@ -110,9 +112,14 @@ export async function recoverWithdrawal(
   const inspectorWallet =
     resolveOptionalKeypairFromEnv("ANCHOR_WALLET")?.keypair ??
     resolveOptionalKeypairFromEnv("SENDER_WALLET")?.keypair ??
-    (inspectorWalletPath ? resolveKeypairFromEnv("ANCHOR_WALLET").keypair : Keypair.generate());
+    (inspectorWalletPath
+      ? resolveKeypairFromEnv("ANCHOR_WALLET").keypair
+      : Keypair.generate());
   const inspectorProvider = createAnchorProvider(conn, inspectorWallet);
-  const program = loadLowkieProgram(inspectorProvider, programId) as Program<any>;
+  const program = loadLowkieProgram(
+    inspectorProvider,
+    programId,
+  ) as Program<any>;
   const remoteRelayerConfig = resolveRemoteRelayerConfig();
   const relayerResolution = remoteRelayerConfig
     ? undefined
@@ -157,13 +164,14 @@ export async function recoverWithdrawal(
       });
       continue;
     }
-    failed.push({ noteHash: hashHex, error: `Unexpected status: ${status.status}` });
+    failed.push({
+      noteHash: hashHex,
+      error: `Unexpected status: ${status.status}`,
+    });
   }
 
   if (pendingNotes.length === 0) {
-    console.log(
-      `\n✅ All notes resolved. Cleaning recovery file.`,
-    );
+    console.log(`\n✅ All notes resolved. Cleaning recovery file.`);
     deleteRecoveryFile(recoveryId);
     return { recoveryId, action: "withdraw", succeeded, failed, cleaned: true };
   }
@@ -195,7 +203,12 @@ export async function recoverWithdrawal(
           remoteRelayerConfig,
         );
       } else {
-        if (!relayerProvider || !relayerProgram || !relayerKp || !relayerResolution) {
+        if (
+          !relayerProvider ||
+          !relayerProgram ||
+          !relayerKp ||
+          !relayerResolution
+        ) {
           throw new Error(
             "RELAYER_KEYPAIR_PATH is required for local recovery withdrawal.",
           );
@@ -247,7 +260,9 @@ export async function recoverRefund(
 
   const config = loadLowkieProgramRuntimeConfig();
   const conn = createAnchorConnection(data.rpcUrl || config.rpcUrl);
-  const programId = new PublicKey(data.programId || config.programId.toBase58());
+  const programId = new PublicKey(
+    data.programId || config.programId.toBase58(),
+  );
   const senderKp = resolveKeypairFromEnv("SENDER_WALLET").keypair;
   const provider = createAnchorProvider(conn, senderKp);
   const program = loadLowkieProgram(provider, programId) as Program<any>;
@@ -291,7 +306,10 @@ export async function recoverRefund(
     // On-chain refund: close note + nullifier accounts, return SOL to sender
     const noteHash = Buffer.from(note.noteHash);
     const nullifierHash = computeNullifierHash(new Uint8Array(note.noteSecret));
-    const nullifierRecordPda = deriveNullifierRecordPda(programId, nullifierHash);
+    const nullifierRecordPda = deriveNullifierRecordPda(
+      programId,
+      nullifierHash,
+    );
     const denominationLamports = BigInt(note.denominationLamports);
     const poolPda = derivePoolPda(programId, denominationLamports);
     const vaultPda = deriveVaultPda(programId, denominationLamports);
@@ -313,7 +331,9 @@ export async function recoverRefund(
       succeeded.push(hashHex);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      console.error(`   ❌ Refund failed for ${hashHex.slice(0, 12)}...: ${msg}`);
+      console.error(
+        `   ❌ Refund failed for ${hashHex.slice(0, 12)}...: ${msg}`,
+      );
       failed.push({ noteHash: hashHex, error: msg });
     }
   }
@@ -384,14 +404,18 @@ if (require.main === module) {
   const recoveryId = args.find((a) => !a.startsWith("--"));
 
   if (!recoveryId) {
-    console.error("Usage: npx ts-node client/recover.ts [--refund] <recoveryId>");
+    console.error(
+      "Usage: npx ts-node client/recover.ts [--refund] <recoveryId>",
+    );
     process.exit(1);
   }
 
   const action = isRefund ? recoverRefund : recoverWithdrawal;
   action(recoveryId)
     .then((result) => {
-      console.log(`\nResult: ${result.succeeded.length} succeeded, ${result.failed.length} failed`);
+      console.log(
+        `\nResult: ${result.succeeded.length} succeeded, ${result.failed.length} failed`,
+      );
       if (result.failed.length > 0) {
         process.exit(1);
       }

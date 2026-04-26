@@ -521,7 +521,9 @@ export async function executeRelayRequest(
   request: RelayRequest,
 ): Promise<RelayResult> {
   const parsed = parseRelayRequest(request);
-  const relayerResolution = resolveOptionalKeypairFromEnv("RELAYER_KEYPAIR_PATH");
+  const relayerResolution = resolveOptionalKeypairFromEnv(
+    "RELAYER_KEYPAIR_PATH",
+  );
   if (!relayerResolution) {
     throw new Error("RELAYER_KEYPAIR_PATH is required for relay execution.");
   }

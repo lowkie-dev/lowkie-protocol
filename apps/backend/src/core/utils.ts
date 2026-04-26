@@ -73,8 +73,13 @@ function parseSecretKeyMaterial(raw: string, source: string): Uint8Array {
 
   if (trimmed.startsWith("[")) {
     const parsed = JSON.parse(trimmed);
-    if (!Array.isArray(parsed) || parsed.some((value) => !Number.isInteger(value))) {
-      throw new Error(`Keypair JSON must be an array of integers for ${source}`);
+    if (
+      !Array.isArray(parsed) ||
+      parsed.some((value) => !Number.isInteger(value))
+    ) {
+      throw new Error(
+        `Keypair JSON must be an array of integers for ${source}`,
+      );
     }
     return new Uint8Array(parsed);
   }

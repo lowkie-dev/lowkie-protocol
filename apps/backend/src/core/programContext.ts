@@ -37,10 +37,7 @@ export interface LowkieProgramContext extends LowkieProgramRuntimeConfig {
   program: Program<any>;
 }
 
-const DEFAULT_IDL_PATH = path.resolve(
-  __dirname,
-  "../../idl/lowkie_pool.json",
-);
+const DEFAULT_IDL_PATH = path.resolve(__dirname, "../../idl/lowkie_pool.json");
 const DEFAULT_RPC_HTTP_TIMEOUT_MS = 30_000;
 
 function resolveRpcHttpTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
