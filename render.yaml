@@ -38,3 +38,5 @@ services:
         value: "262144"
       - key: LOWKIE_OPERATOR_COMPACT_REGISTRY
         value: "false"
+      - key: DEPOSIT_SPREAD_DELAY_MS
+        value: "0"

@@ -404,24 +404,34 @@ export async function executeSignedDeposits(
         const errorMessage =
           retryError instanceof Error ? retryError.message : String(retryError);
 
-        if (
-          /blockhash not found/i.test(errorMessage) &&
-          senderKp.publicKey.toBase58() === recoveryData.sender
-        ) {
-          const refreshedTx =
-            anchor.web3.VersionedTransaction.deserialize(txBuffer);
-          const latestBlockhash =
-            await provider.connection.getLatestBlockhash("confirmed");
-          refreshedTx.message.recentBlockhash = latestBlockhash.blockhash;
-          refreshedTx.sign([senderKp]);
-          txBuffer = Buffer.from(refreshedTx.serialize());
-          signedTransactionsBase64[index] = txBuffer.toString("base64");
-          note.depositSig = undefined;
-          delete note.depositSig;
-          writeRecoveryFile(recoveryData);
-          console.warn(
-            "   ⚠️ Transaction blockhash expired before submission; refreshed and re-signed with a new blockhash.",
-          );
+        if (/blockhash not found/i.test(errorMessage)) {
+          if (senderKp.publicKey.toBase58() === recoveryData.sender) {
+            // Sender keypair available: refresh blockhash and re-sign
+            const refreshedTx =
+              anchor.web3.VersionedTransaction.deserialize(txBuffer);
+            const latestBlockhash =
+              await provider.connection.getLatestBlockhash("confirmed");
+            refreshedTx.message.recentBlockhash = latestBlockhash.blockhash;
+            refreshedTx.sign([senderKp]);
+            txBuffer = Buffer.from(refreshedTx.serialize());
+            signedTransactionsBase64[index] = txBuffer.toString("base64");
+            note.depositSig = undefined;
+            delete note.depositSig;
+            writeRecoveryFile(recoveryData);
+            console.warn(
+              "   ⚠️ Transaction blockhash expired; refreshed and re-signed with a new blockhash.",
+            );
+          } else {
+            // Sender keypair not available (e.g., Render backend): cannot recover from expired blockhash
+            // This typically means the transaction was built too far in advance.
+            // Recommend to reduce DEPOSIT_SPREAD_DELAY_MS or rebuild transactions more frequently.
+            console.error(
+              "   ❌ Blockhash expired and sender keypair not available for re-signing.",
+            );
+            console.error(
+              "   💡 Set DEPOSIT_SPREAD_DELAY_MS=0 or rebuild deposits individually to avoid this issue.",
+            );
+          }
         }
 
         if (/already been processed/i.test(errorMessage) && !depositSig) {
