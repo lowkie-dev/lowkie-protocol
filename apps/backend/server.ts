@@ -14,6 +14,10 @@ import {
   listRecoverableTransfers,
 } from "./src/core/recover";
 import {
+  loadRecoveryFile,
+  deleteRecoveryFile,
+} from "./src/core/recoveryStore";
+import {
   inspectLowkieReadiness,
   LowkieReadinessError,
 } from "./src/core/readiness";
@@ -646,6 +650,34 @@ fastify.register(async (instance) => {
       reply.status(500).send({ success: false, error: "Recovery failed" });
     }
   });
+
+  instance.delete(
+    "/api/recovery/:id",
+    async (request: FastifyRequest<{ Params: { id: string } }>, reply) => {
+      try {
+        const { id } = request.params;
+        if (!/^lowkie-[\w-]+$/.test(id)) {
+          reply
+            .status(400)
+            .send({ success: false, error: "Invalid recovery id" });
+          return;
+        }
+        const file = loadRecoveryFile(id);
+        if (!file) {
+          reply.status(404).send({ success: false, error: "Not found" });
+          return;
+        }
+        deleteRecoveryFile(id);
+        reply.send({ success: true });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error("Dismiss recovery error:", redactErrorMessage(message));
+        reply
+          .status(500)
+          .send({ success: false, error: "Internal server error" });
+      }
+    },
+  );
 
   instance.post("/api/relay", async (request, reply) => {
     if (SECURITY.serializeSendRequests && relayInFlight) {

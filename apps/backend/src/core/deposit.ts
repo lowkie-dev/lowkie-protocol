@@ -33,6 +33,7 @@ import {
   recoveryFilePath,
   writeRecoveryFile,
   loadRecoveryFile,
+  deleteRecoveryFile,
 } from "./recoveryStore";
 
 const DEPOSIT_SPREAD_DELAY_MS = parseInt(
@@ -541,6 +542,15 @@ export async function executeSignedDeposits(
 
   if (depositReceipts.length === 0 && depositFailure) {
     throw depositFailure;
+  }
+
+  // All deposits landed — recovery file is no longer needed
+  if (!depositFailure) {
+    try {
+      deleteRecoveryFile(recoveryId);
+    } catch {
+      // non-fatal: file may already be gone
+    }
   }
 
   return {

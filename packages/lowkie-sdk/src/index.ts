@@ -314,6 +314,12 @@ export class LowkieSdkClient {
     });
   }
 
+  dismissRecovery(id: string): Promise<ApiSuccessEnvelope> {
+    return this.request<ApiSuccessEnvelope>(`/api/recovery/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
+  }
+
   // ── Relay ────────────────────────────────────────────────────────────────
 
   relay(request: RelayRequest): Promise<RelayResponse> {
