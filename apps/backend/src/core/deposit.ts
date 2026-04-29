@@ -462,7 +462,9 @@ export async function executeSignedDeposits(
           );
           if (!depositFailure) {
             depositFailure =
-              retryError instanceof Error ? retryError : new Error(errorMessage);
+              retryError instanceof Error
+                ? retryError
+                : new Error(errorMessage);
           }
           break;
         }

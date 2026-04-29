@@ -123,9 +123,7 @@ import { VersionedTransaction } from "@solana/web3.js";
 
 const signedTransactionsBase64 = await Promise.all(
   built.transactionsBase64.map(async (encoded) => {
-    const tx = VersionedTransaction.deserialize(
-      Buffer.from(encoded, "base64"),
-    );
+    const tx = VersionedTransaction.deserialize(Buffer.from(encoded, "base64"));
     const signed = await wallet.signTransaction(tx);
     return Buffer.from(signed.serialize()).toString("base64");
   }),

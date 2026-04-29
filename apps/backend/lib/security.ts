@@ -1,5 +1,118 @@
-import { timingSafeEqual } from "node:crypto";
+import { createPublicKey, timingSafeEqual, verify } from "node:crypto";
+import bs58 from "bs58";
 import { parseBooleanEnv, EnvSource } from "../src/core/utils";
+
+export const RECOVERY_AUTH_MAX_AGE_MS = 5 * 60_000;
+export const RECOVERY_AUTH_MAX_FUTURE_SKEW_MS = 60_000;
+export const RECOVERY_AUTH_HEADERS = {
+  wallet: "x-lowkie-recovery-wallet",
+  signedAt: "x-lowkie-recovery-signed-at",
+  signature: "x-lowkie-recovery-signature",
+} as const;
+
+const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
+
+export function createRecoveryAuthMessage(
+  walletAddress: string,
+  signedAt: string,
+): string {
+  return [
+    "Lowkie Recovery Authorization",
+    "Authorize access to Lowkie recovery files for this wallet.",
+    `Wallet: ${walletAddress}`,
+    `Issued At: ${signedAt}`,
+  ].join("\n");
+}
+
+function headerValueToString(value: unknown): string | null {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (Array.isArray(value) && typeof value[0] === "string") {
+    return value[0];
+  }
+
+  return null;
+}
+
+function parseRecoverySignature(signatureBase64: string): Buffer | null {
+  try {
+    const signature = Buffer.from(signatureBase64, "base64");
+    return signature.length === 64 ? signature : null;
+  } catch {
+    return null;
+  }
+}
+
+function createEd25519PublicKey(walletAddress: string) {
+  const publicKeyBytes = bs58.decode(walletAddress);
+  if (publicKeyBytes.length !== 32) {
+    throw new Error("Invalid wallet address");
+  }
+
+  return createPublicKey({
+    key: Buffer.concat([ED25519_SPKI_PREFIX, Buffer.from(publicKeyBytes)]),
+    format: "der",
+    type: "spki",
+  });
+}
+
+export function verifyRecoveryAuthorization(headers: {
+  [key: string]: unknown;
+}):
+  | { ok: true; walletAddress: string; signedAt: string }
+  | { ok: false; error: string } {
+  const walletAddress = headerValueToString(
+    headers[RECOVERY_AUTH_HEADERS.wallet],
+  );
+  const signedAt = headerValueToString(headers[RECOVERY_AUTH_HEADERS.signedAt]);
+  const signatureBase64 = headerValueToString(
+    headers[RECOVERY_AUTH_HEADERS.signature],
+  );
+
+  if (!walletAddress || !signedAt || !signatureBase64) {
+    return {
+      ok: false,
+      error: "Missing recovery authorization headers.",
+    };
+  }
+
+  const signedAtMs = Date.parse(signedAt);
+  if (!Number.isFinite(signedAtMs)) {
+    return { ok: false, error: "Invalid recovery authorization timestamp." };
+  }
+
+  const nowMs = Date.now();
+  if (signedAtMs - nowMs > RECOVERY_AUTH_MAX_FUTURE_SKEW_MS) {
+    return { ok: false, error: "Recovery authorization timestamp is invalid." };
+  }
+
+  if (nowMs - signedAtMs > RECOVERY_AUTH_MAX_AGE_MS) {
+    return { ok: false, error: "Recovery authorization has expired." };
+  }
+
+  const signature = parseRecoverySignature(signatureBase64);
+  if (!signature) {
+    return { ok: false, error: "Invalid recovery authorization signature." };
+  }
+
+  try {
+    const publicKey = createEd25519PublicKey(walletAddress);
+    const message = Buffer.from(
+      createRecoveryAuthMessage(walletAddress, signedAt),
+      "utf8",
+    );
+
+    if (!verify(null, message, publicKey, signature)) {
+      return { ok: false, error: "Recovery authorization signature mismatch." };
+    }
+  } catch {
+    return { ok: false, error: "Invalid recovery authorization." };
+  }
+
+  return { ok: true, walletAddress, signedAt };
+}
 
 export interface ApiSecurityConfig {
   host: string;
@@ -211,8 +324,14 @@ export function buildCorsHeaders(
   allowedOrigins: readonly string[],
 ): Record<string, string> {
   const headers: Record<string, string> = {
-    "Access-Control-Allow-Headers": "authorization,content-type",
-    "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+    "Access-Control-Allow-Headers": [
+      "authorization",
+      "content-type",
+      RECOVERY_AUTH_HEADERS.wallet,
+      RECOVERY_AUTH_HEADERS.signedAt,
+      RECOVERY_AUTH_HEADERS.signature,
+    ].join(","),
+    "Access-Control-Allow-Methods": "GET,POST,DELETE,OPTIONS",
   };
 
   if (allowedOrigins.length === 0) {

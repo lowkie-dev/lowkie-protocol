@@ -1,5 +1,11 @@
+import dotenv from "dotenv";
+dotenv.config();
+import { PublicKey } from "@solana/web3.js";
 import { expect } from "chai";
-import { buildRelayRequest, parseRelayRequest } from "../apps/backend/src/core/relayProtocol";
+import {
+  buildRelayRequest,
+  parseRelayRequest,
+} from "../apps/backend/src/core/relayProtocol";
 
 describe("Relay protocol", () => {
   it("round-trips serialized relay requests", () => {
@@ -10,12 +16,19 @@ describe("Relay protocol", () => {
       delayMs: 15_000,
       clusterOffset: 456,
       programId: "11111111111111111111111111111114",
-      rpcUrl: "https://api.devnet.solana.com",
+      rpcUrl:
+        process.env.ANCHOR_PROVIDER_URL ?? "https://api.devnet.solana.com",
       subNotes: [
         {
-          noteSecret: new Uint8Array(Array.from({ length: 32 }, (_, index) => index)),
-          withdrawKey: new Uint8Array(Array.from({ length: 32 }, (_, index) => 255 - index)),
-          hash: Buffer.from(Array.from({ length: 32 }, (_, index) => index + 10)),
+          noteSecret: new Uint8Array(
+            Array.from({ length: 32 }, (_, index) => index),
+          ),
+          withdrawKey: new Uint8Array(
+            Array.from({ length: 32 }, (_, index) => 255 - index),
+          ),
+          hash: Buffer.from(
+            Array.from({ length: 32 }, (_, index) => index + 10),
+          ),
           denominationLamports: 100_000_000n,
           amountLamports: 100_000_000n,
         },

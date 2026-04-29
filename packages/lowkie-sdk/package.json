@@ -1,6 +1,6 @@
 {
   "name": "@lowkie/sdk",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "TypeScript SDK for the Lowkie privacy pool protocol",
   "keywords": [
     "solana",

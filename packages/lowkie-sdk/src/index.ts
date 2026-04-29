@@ -297,14 +297,17 @@ export class LowkieSdkClient {
 
   // ── Recovery ─────────────────────────────────────────────────────────────
 
-  listRecoverable(): Promise<
-    ApiSuccessEnvelope & { transfers: RecoverableTransfer[] }
-  > {
+  listRecoverable(
+    walletAddress?: string,
+  ): Promise<ApiSuccessEnvelope & { transfers: RecoverableTransfer[] }> {
+    const params = walletAddress
+      ? `?wallet=${encodeURIComponent(walletAddress)}`
+      : "";
     return this.request<
       ApiSuccessEnvelope & {
         transfers: RecoverableTransfer[];
       }
-    >("/api/recoverable");
+    >(`/api/recoverable${params}`);
   }
 
   recover(request: RecoverRequest): Promise<RecoverResponse> {
@@ -315,9 +318,12 @@ export class LowkieSdkClient {
   }
 
   dismissRecovery(id: string): Promise<ApiSuccessEnvelope> {
-    return this.request<ApiSuccessEnvelope>(`/api/recovery/${encodeURIComponent(id)}`, {
-      method: "DELETE",
-    });
+    return this.request<ApiSuccessEnvelope>(
+      `/api/recovery/${encodeURIComponent(id)}`,
+      {
+        method: "DELETE",
+      },
+    );
   }
 
   // ── Relay ────────────────────────────────────────────────────────────────

@@ -58,6 +58,12 @@ dotenv.config();
 
 const MIN_RELAYER_BALANCE_LAMPORTS = Math.floor(0.05 * LAMPORTS_PER_SOL);
 const LOCALNET_RELAYER_AIRDROP_LAMPORTS = Math.floor(0.5 * LAMPORTS_PER_SOL);
+const BUILD_RPC_RETRY_MAX_ATTEMPTS = parseInt(
+  process.env.BUILD_RPC_RETRY_MAX_ATTEMPTS ?? "3",
+);
+const BUILD_RPC_RETRY_BASE_MS = parseInt(
+  process.env.BUILD_RPC_RETRY_BASE_MS ?? "500",
+);
 
 export interface SendResult {
   recipient: string;
@@ -92,6 +98,51 @@ export class WithdrawalFailedError extends Error {
     super(message);
     this.name = "WithdrawalFailedError";
   }
+}
+
+export function isTransientBuildRpcError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return [
+    "429",
+    "too many requests",
+    "fetch failed",
+    "connect timeout",
+    "timed out",
+    "service unavailable",
+    "gateway timeout",
+    "econnreset",
+    "enotfound",
+    "etimedout",
+    "socket hang up",
+  ].some((fragment) => message.toLowerCase().includes(fragment));
+}
+
+async function withBuildRpcRetry<T>(operation: () => Promise<T>): Promise<T> {
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= BUILD_RPC_RETRY_MAX_ATTEMPTS; attempt++) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (
+        !isTransientBuildRpcError(error) ||
+        attempt === BUILD_RPC_RETRY_MAX_ATTEMPTS
+      ) {
+        throw error;
+      }
+
+      const backoffMs = BUILD_RPC_RETRY_BASE_MS * Math.pow(2, attempt - 1);
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(
+        `   ⚠️ Build deposits RPC attempt ${attempt}/${BUILD_RPC_RETRY_MAX_ATTEMPTS} failed: ${message}`,
+      );
+      console.warn(`   ↻ Retrying build deposits in ${backoffMs}ms...`);
+      await new Promise((resolve) => setTimeout(resolve, backoffMs));
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
 function summarizeDenominationNotes(notes: bigint[]): string {
@@ -142,45 +193,52 @@ export async function lowkieBuildDeposits(
   amountSol: number,
   delayMs = DEFAULT_RELAYER_DELAY_MS,
 ) {
-  const { rpcUrl, network, programId, configuredClusterOffset, runtimeSafety } =
-    loadLowkieProgramRuntimeConfig();
-  const conn = createAnchorConnection(rpcUrl);
-  const provider = createAnchorProvider(conn, anchor.web3.Keypair.generate());
-  anchor.setProvider(provider);
-  const program = loadLowkieProgram(provider, programId) as Program<any>;
+  return await withBuildRpcRetry(async () => {
+    const {
+      rpcUrl,
+      network,
+      programId,
+      configuredClusterOffset,
+      runtimeSafety,
+    } = loadLowkieProgramRuntimeConfig();
+    const conn = createAnchorConnection(rpcUrl);
+    const provider = createAnchorProvider(conn, anchor.web3.Keypair.generate());
+    anchor.setProvider(provider);
+    const program = loadLowkieProgram(provider, programId) as Program<any>;
 
-  const arciumEnv = getArciumEnv();
-  const clusterOffset =
-    configuredClusterOffset ?? arciumEnv.arciumClusterOffset;
+    const arciumEnv = getArciumEnv();
+    const clusterOffset =
+      configuredClusterOffset ?? arciumEnv.arciumClusterOffset;
 
-  await assertLowkieReadiness(provider, program, clusterOffset);
+    await assertLowkieReadiness(provider, program, clusterOffset);
 
-  const senderPubkey = new PublicKey(senderStr);
-  const recipient = new PublicKey(recipientStr);
-  const totalLamports = BigInt(Math.round(amountSol * LAMPORTS_PER_SOL));
-  const denominationNotes = decomposeIntoDenominations(totalLamports);
+    const senderPubkey = new PublicKey(senderStr);
+    const recipient = new PublicKey(recipientStr);
+    const totalLamports = BigInt(Math.round(amountSol * LAMPORTS_PER_SOL));
+    const denominationNotes = decomposeIntoDenominations(totalLamports);
 
-  console.log(`\n━━━ Splitting ${formatSol(totalLamports)} ━━━`);
-  console.log(`  Recipient: ${redactValue(recipient.toBase58())}`);
-  console.log(
-    `  Notes:     ${redactDenominationSummary(summarizeDenominationNotes(denominationNotes), denominationNotes.length)}`,
-  );
+    console.log(`\n━━━ Splitting ${formatSol(totalLamports)} ━━━`);
+    console.log(`  Recipient: ${redactValue(recipient.toBase58())}`);
+    console.log(
+      `  Notes:     ${redactDenominationSummary(summarizeDenominationNotes(denominationNotes), denominationNotes.length)}`,
+    );
 
-  const { recoveryId, transactionsBase64 } = await buildDepositTransactions({
-    provider,
-    program,
-    senderPubkey,
-    recipient,
-    totalLamports,
-    denominationNotes,
-    delayMs,
-    clusterOffset,
-    programId,
-    rpcUrl,
-    runtimeSafety,
+    const { recoveryId, transactionsBase64 } = await buildDepositTransactions({
+      provider,
+      program,
+      senderPubkey,
+      recipient,
+      totalLamports,
+      denominationNotes,
+      delayMs,
+      clusterOffset,
+      programId,
+      rpcUrl,
+      runtimeSafety,
+    });
+
+    return { recoveryId, transactionsBase64 };
   });
-
-  return { recoveryId, transactionsBase64 };
 }
 
 export async function lowkieSubmitDeposits(

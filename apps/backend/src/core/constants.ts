@@ -4,6 +4,8 @@
  * Single source of truth for program IDs, default configs, and
  * denomination values. Keep in sync with the on-chain program.
  */
+import dotenv from "dotenv";
+dotenv.config();
 import fs from "fs";
 import path from "path";
 import { PublicKey } from "@solana/web3.js";
@@ -12,7 +14,8 @@ import { PublicKey } from "@solana/web3.js";
 
 export const DEFAULT_PROGRAM_ID = "LowkiePoo1111111111111111111111111111111111";
 export const DEFAULT_WALLET_PATH = "~/.config/solana/id.json";
-export const DEFAULT_DEVNET_RPC_URL = "https://api.devnet.solana.com";
+export const DEFAULT_DEVNET_RPC_URL =
+  process.env.ANCHOR_PROVIDER_URL ?? "https://api.devnet.solana.com";
 
 // ── Network defaults ─────────────────────────────────────────────────────────
 

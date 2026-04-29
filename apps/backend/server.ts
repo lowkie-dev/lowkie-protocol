@@ -7,16 +7,14 @@ import {
   lowkieBuildDeposits,
   lowkieSubmitDeposits,
   WithdrawalFailedError,
+  isTransientBuildRpcError,
 } from "./src/core/send";
 import {
   recoverWithdrawal,
   recoverRefund,
   listRecoverableTransfers,
 } from "./src/core/recover";
-import {
-  loadRecoveryFile,
-  deleteRecoveryFile,
-} from "./src/core/recoveryStore";
+import { loadRecoveryFile, deleteRecoveryFile } from "./src/core/recoveryStore";
 import {
   inspectLowkieReadiness,
   LowkieReadinessError,
@@ -50,7 +48,9 @@ import {
 import {
   createFixedWindowRateLimiter,
   isAuthorized,
+  RECOVERY_AUTH_HEADERS,
   resolveApiSecurityConfig,
+  verifyRecoveryAuthorization,
 } from "./lib/security";
 
 dotenv.config();
@@ -90,6 +90,73 @@ const rateLimit = createFixedWindowRateLimiter(SECURITY);
 
 let sendInFlight = false;
 let relayInFlight = false;
+const HEALTH_CACHE_TTL_MS = parseInt(
+  process.env.LOWKIE_HEALTH_CACHE_TTL_MS ?? "15000",
+);
+
+let healthPayloadCache: {
+  expiresAtMs: number;
+  payload: Record<string, unknown>;
+} | null = null;
+
+function resolveRecoveryWalletAddress(request: FastifyRequest): string | null {
+  const queryWallet = (request.query as Record<string, unknown> | undefined)
+    ?.wallet;
+  if (typeof queryWallet === "string" && queryWallet.length > 0) {
+    return queryWallet;
+  }
+
+  const headerWallet = request.headers[RECOVERY_AUTH_HEADERS.wallet];
+  return typeof headerWallet === "string" && headerWallet.length > 0
+    ? headerWallet
+    : null;
+}
+
+function authorizeRecoveryRequest(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): string | null {
+  const verification = verifyRecoveryAuthorization(
+    request.headers as Record<string, unknown>,
+  );
+  if (!verification.ok) {
+    reply.status(401).send({ success: false, error: verification.error });
+    return null;
+  }
+
+  const requestedWallet = resolveRecoveryWalletAddress(request);
+  if (requestedWallet && requestedWallet !== verification.walletAddress) {
+    reply.status(403).send({
+      success: false,
+      error: "Recovery authorization wallet mismatch.",
+    });
+    return null;
+  }
+
+  return verification.walletAddress;
+}
+
+function authorizeRecoveryOwnership(
+  recoveryId: string,
+  walletAddress: string,
+  reply: FastifyReply,
+) {
+  const file = loadRecoveryFile(recoveryId);
+  if (!file) {
+    reply.status(404).send({ success: false, error: "Not found" });
+    return null;
+  }
+
+  if (file.sender !== walletAddress && file.recipient !== walletAddress) {
+    reply.status(403).send({
+      success: false,
+      error: "Recovery file does not belong to this wallet.",
+    });
+    return null;
+  }
+
+  return file;
+}
 
 function resolveSenderWalletInfo(): {
   senderWalletConfigured: boolean;
@@ -178,6 +245,10 @@ function resolveConfiguredProgramStatus(): {
 }
 
 async function resolveHealthPayload(): Promise<Record<string, unknown>> {
+  if (healthPayloadCache && Date.now() < healthPayloadCache.expiresAtMs) {
+    return healthPayloadCache.payload;
+  }
+
   const senderWalletInfo = resolveSenderWalletInfo();
   const relayerWalletInfo = resolveRelayerWalletInfo();
   const configuredProgram = resolveConfiguredProgramStatus();
@@ -235,15 +306,22 @@ async function resolveHealthPayload(): Promise<Record<string, unknown>> {
       clusterOffset,
     );
 
-    return {
+    const payload = {
       ...basePayload,
       programId: programId.toBase58(),
       clusterOffset,
       readiness,
     };
+
+    healthPayloadCache = {
+      expiresAtMs: Date.now() + HEALTH_CACHE_TTL_MS,
+      payload,
+    };
+
+    return payload;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    return {
+    const payload = {
       ...basePayload,
       ok: false,
       readiness: {
@@ -251,6 +329,13 @@ async function resolveHealthPayload(): Promise<Record<string, unknown>> {
         issues: [message],
       },
     };
+
+    healthPayloadCache = {
+      expiresAtMs: Date.now() + HEALTH_CACHE_TTL_MS,
+      payload,
+    };
+
+    return payload;
   }
 }
 
@@ -263,8 +348,14 @@ const fastify = Fastify({
 
 fastify.register(cors, {
   origin: SECURITY.allowedOrigins.length > 0 ? SECURITY.allowedOrigins : true,
-  methods: ["GET", "POST", "OPTIONS"],
-  allowedHeaders: ["authorization", "content-type"],
+  methods: ["GET", "POST", "DELETE", "OPTIONS"],
+  allowedHeaders: [
+    "authorization",
+    "content-type",
+    RECOVERY_AUTH_HEADERS.wallet,
+    RECOVERY_AUTH_HEADERS.signedAt,
+    RECOVERY_AUTH_HEADERS.signature,
+  ],
 });
 
 // ── Public Routes ────────────────────────────────────────────────────────────
@@ -381,7 +472,22 @@ fastify.register(async (instance) => {
 
   instance.get("/api/recoverable", async (request, reply) => {
     try {
-      const transfers = listRecoverableTransfers();
+      // Listing only requires the wallet address as a query param.
+      // The server filters recovery files by sender/recipient ownership, so no
+      // signature is needed for this read-only endpoint. Mutating operations
+      // (/api/recover and /api/recovery/:id DELETE) still require signed auth.
+      const walletAddress = resolveRecoveryWalletAddress(request);
+      if (!walletAddress) {
+        reply
+          .status(400)
+          .send({
+            success: false,
+            error: "Missing required query param: wallet",
+          });
+        return;
+      }
+
+      const transfers = await listRecoverableTransfers(walletAddress);
       return { success: true, transfers };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -547,6 +653,26 @@ fastify.register(async (instance) => {
       return { success: true, ...result };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      if (error instanceof LowkieReadinessError) {
+        console.error("Build deposits readiness error:", message);
+        reply.status(503).send({
+          success: false,
+          error: "Protocol is not ready. Check /api/health for details.",
+          readiness: error.report,
+        });
+        return;
+      }
+
+      if (isTransientBuildRpcError(error)) {
+        console.error("Build deposits RPC error:", message);
+        reply.status(503).send({
+          success: false,
+          error:
+            "Upstream Solana RPC is rate-limiting the backend. Retry shortly or switch ANCHOR_PROVIDER_URL to a dedicated devnet RPC endpoint.",
+        });
+        return;
+      }
+
       console.error("Build deposits error:", redactErrorMessage(message));
       reply
         .status(500)
@@ -555,6 +681,8 @@ fastify.register(async (instance) => {
   });
 
   instance.post("/api/submit-deposits", async (request, reply) => {
+    let submitRecoveryId: string | undefined;
+
     if (SECURITY.serializeSendRequests && sendInFlight) {
       reply.status(409).send({
         success: false,
@@ -581,6 +709,8 @@ fastify.register(async (instance) => {
         return;
       }
 
+      submitRecoveryId = parsed.recoveryId;
+
       console.log(`\n━━━ API /api/submit-deposits ━━━`);
       const result = await lowkieSubmitDeposits(
         parsed.recoveryId,
@@ -604,9 +734,12 @@ fastify.register(async (instance) => {
       } else {
         const message = error instanceof Error ? error.message : String(error);
         console.error("Submit deposits error:", redactErrorMessage(message));
-        reply
-          .status(500)
-          .send({ success: false, error: "Failed to submit deposits" });
+        reply.status(500).send({
+          success: false,
+          error: "Failed to submit deposits",
+          detailedError: redactErrorMessage(message),
+          recoveryId: submitRecoveryId,
+        });
       }
     } finally {
       sendInFlight = false;
@@ -615,6 +748,11 @@ fastify.register(async (instance) => {
 
   instance.post("/api/recover", async (request, reply) => {
     try {
+      const walletAddress = authorizeRecoveryRequest(request, reply);
+      if (!walletAddress) {
+        return;
+      }
+
       const parsed = request.body as {
         recoveryId?: string;
         mode?: "withdraw" | "refund";
@@ -633,6 +771,12 @@ fastify.register(async (instance) => {
 
       if (!/^lowkie-[\w-]+$/.test(parsed.recoveryId)) {
         reply.status(400).send({ success: false, error: "Invalid recoveryId" });
+        return;
+      }
+
+      if (
+        !authorizeRecoveryOwnership(parsed.recoveryId, walletAddress, reply)
+      ) {
         return;
       }
 
@@ -655,6 +799,11 @@ fastify.register(async (instance) => {
     "/api/recovery/:id",
     async (request: FastifyRequest<{ Params: { id: string } }>, reply) => {
       try {
+        const walletAddress = authorizeRecoveryRequest(request, reply);
+        if (!walletAddress) {
+          return;
+        }
+
         const { id } = request.params;
         if (!/^lowkie-[\w-]+$/.test(id)) {
           reply
@@ -662,11 +811,11 @@ fastify.register(async (instance) => {
             .send({ success: false, error: "Invalid recovery id" });
           return;
         }
-        const file = loadRecoveryFile(id);
-        if (!file) {
-          reply.status(404).send({ success: false, error: "Not found" });
+
+        if (!authorizeRecoveryOwnership(id, walletAddress, reply)) {
           return;
         }
+
         deleteRecoveryFile(id);
         reply.send({ success: true });
       } catch (error) {

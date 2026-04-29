@@ -53,6 +53,16 @@ export interface RecoveryResult {
   cleaned: boolean;
 }
 
+export interface RecoverableTransferSummary {
+  id: string;
+  createdAt: string;
+  recipient: string;
+  totalLamports: string;
+  noteCount: number;
+  availableActions: Array<"withdraw" | "refund">;
+  statusLabel: string;
+}
+
 // ── Note Status Check ────────────────────────────────────────────────────────
 
 interface NoteOnChainStatus {
@@ -276,14 +286,20 @@ export async function recoverRefund(
     const status = await fetchNoteStatus(program, notePda);
 
     if (!status.exists) {
-      console.log(`   ✅ Note ${hashHex.slice(0, 12)}... already cleaned up`);
-      succeeded.push(hashHex);
+      failed.push({
+        noteHash: hashHex,
+        error:
+          "No refund was sent because the note account no longer exists. It may already be resolved or require operator verification.",
+      });
       continue;
     }
 
     if (status.status === "withdrawn") {
-      console.log(`   ✅ Note ${hashHex.slice(0, 12)}... already withdrawn`);
-      succeeded.push(hashHex);
+      failed.push({
+        noteHash: hashHex,
+        error:
+          "No refund was sent because this note was already withdrawn. Use withdrawal recovery history or operator verification instead.",
+      });
       continue;
     }
 
@@ -354,24 +370,121 @@ export async function recoverRefund(
 
 // ── List recovery files ──────────────────────────────────────────────────────
 
-export function listRecoverableTransfers(): Array<{
-  id: string;
-  createdAt: string;
-  recipient: string;
-  totalLamports: string;
-  noteCount: number;
-}> {
+export async function listRecoverableTransfers(
+  walletAddress?: string,
+): Promise<RecoverableTransferSummary[]> {
   const ids = listRecoveryFiles();
-  return ids.map((id) => {
-    const data = loadRecoveryFile(id);
-    return {
-      id,
-      createdAt: data?.createdAt ?? "unknown",
-      recipient: data?.recipient ?? "unknown",
-      totalLamports: data?.totalLamports ?? "0",
-      noteCount: data?.notes?.length ?? 0,
-    };
-  });
+  const transfers = ids
+    .map((id) => {
+      const data = loadRecoveryFile(id);
+      return {
+        id,
+        createdAt: data?.createdAt ?? "unknown",
+        recipient: data?.recipient ?? "unknown",
+        sender: data?.sender ?? "unknown",
+        totalLamports: data?.totalLamports ?? "0",
+        noteCount: data?.notes?.length ?? 0,
+      };
+    })
+    .filter((transfer) => {
+      // If no wallet specified, return all (backward compatibility for CLI)
+      if (!walletAddress) {
+        return true;
+      }
+      // Filter to only transfers where the wallet is sender or recipient
+      return (
+        transfer.recipient === walletAddress ||
+        transfer.sender === walletAddress
+      );
+    });
+
+  const config = loadLowkieProgramRuntimeConfig();
+  const programCache = new Map<string, Program<any>>();
+
+  const resolveProgram = (rpcUrl: string, programId: string): Program<any> => {
+    const cacheKey = `${rpcUrl}::${programId}`;
+    const cached = programCache.get(cacheKey);
+    if (cached) return cached;
+
+    const conn = createAnchorConnection(rpcUrl);
+    const provider = createAnchorProvider(conn, Keypair.generate());
+    const program = loadLowkieProgram(
+      provider,
+      new PublicKey(programId),
+    ) as Program<any>;
+    programCache.set(cacheKey, program);
+    return program;
+  };
+
+  return await Promise.all(
+    transfers.map(async ({ sender, ...transfer }) => {
+      const data = loadRecoveryFile(transfer.id);
+      if (!data) {
+        return {
+          ...transfer,
+          availableActions: [],
+          statusLabel: "Unavailable",
+        };
+      }
+
+      const program = resolveProgram(
+        data.rpcUrl || config.rpcUrl,
+        data.programId || config.programId.toBase58(),
+      );
+      const statuses = await Promise.all(
+        data.notes.map((note) =>
+          fetchNoteStatus(program, new PublicKey(note.notePda)),
+        ),
+      );
+
+      let withdrawable = 0;
+      let refundable = 0;
+      let blocked = 0;
+
+      for (const status of statuses) {
+        if (!status.exists || status.status === "withdrawn") {
+          continue;
+        }
+
+        if (status.status === "failed") {
+          if (status.poolCreditApplied) {
+            blocked += 1;
+          } else {
+            refundable += 1;
+          }
+          continue;
+        }
+
+        if (status.status === "ready" || status.status === "pending") {
+          withdrawable += 1;
+          continue;
+        }
+
+        blocked += 1;
+      }
+
+      const availableActions: Array<"withdraw" | "refund"> = [];
+      if (withdrawable > 0) availableActions.push("withdraw");
+      if (refundable > 0) availableActions.push("refund");
+
+      let statusLabel = "Resolved";
+      if (withdrawable > 0 && refundable > 0) {
+        statusLabel = "Mixed recovery";
+      } else if (withdrawable > 0) {
+        statusLabel = "Withdrawal available";
+      } else if (refundable > 0) {
+        statusLabel = "Refund available";
+      } else if (blocked > 0) {
+        statusLabel = "Needs review";
+      }
+
+      return {
+        ...transfer,
+        availableActions,
+        statusLabel,
+      };
+    }),
+  );
 }
 
 // ── CLI ──────────────────────────────────────────────────────────────────────
@@ -380,48 +493,54 @@ if (require.main === module) {
   const args = process.argv.slice(2);
 
   if (args.includes("--list") || args.length === 0) {
-    const transfers = listRecoverableTransfers();
-    if (transfers.length === 0) {
-      console.log("No recovery files found.");
-    } else {
-      console.log(`\n📦 ${transfers.length} recoverable transfer(s):\n`);
-      for (const t of transfers) {
-        console.log(
-          `  ${t.id}  ${t.createdAt}  ${Number(t.totalLamports) / LAMPORTS_PER_SOL} SOL  ${t.noteCount} note(s)  → ${t.recipient.slice(0, 8)}...`,
-        );
-      }
-      console.log(
-        `\nRun: npx ts-node client/recover.ts <id>          to retry withdrawal`,
-      );
-      console.log(
-        `     npx ts-node client/recover.ts --refund <id>  to refund failed deposits`,
-      );
-    }
-    process.exit(0);
-  }
-
-  const isRefund = args.includes("--refund");
-  const recoveryId = args.find((a) => !a.startsWith("--"));
-
-  if (!recoveryId) {
-    console.error(
-      "Usage: npx ts-node client/recover.ts [--refund] <recoveryId>",
-    );
-    process.exit(1);
-  }
-
-  const action = isRefund ? recoverRefund : recoverWithdrawal;
-  action(recoveryId)
-    .then((result) => {
-      console.log(
-        `\nResult: ${result.succeeded.length} succeeded, ${result.failed.length} failed`,
-      );
-      if (result.failed.length > 0) {
+    void listRecoverableTransfers()
+      .then((transfers) => {
+        if (transfers.length === 0) {
+          console.log("No recovery files found.");
+        } else {
+          console.log(`\n📦 ${transfers.length} recoverable transfer(s):\n`);
+          for (const t of transfers) {
+            console.log(
+              `  ${t.id}  ${t.createdAt}  ${Number(t.totalLamports) / LAMPORTS_PER_SOL} SOL  ${t.noteCount} note(s)  → ${t.recipient.slice(0, 8)}...`,
+            );
+          }
+          console.log(
+            `\nRun: npx ts-node client/recover.ts <id>          to retry withdrawal`,
+          );
+          console.log(
+            `     npx ts-node client/recover.ts --refund <id>  to refund failed deposits`,
+          );
+        }
+        process.exit(0);
+      })
+      .catch((e) => {
+        console.error("Failed to list recovery files:", e.message ?? e);
         process.exit(1);
-      }
-    })
-    .catch((e) => {
-      console.error("Recovery failed:", e.message ?? e);
+      });
+  } else {
+    const isRefund = args.includes("--refund");
+    const recoveryId = args.find((a) => !a.startsWith("--"));
+
+    if (!recoveryId) {
+      console.error(
+        "Usage: npx ts-node client/recover.ts [--refund] <recoveryId>",
+      );
       process.exit(1);
-    });
+    }
+
+    const action = isRefund ? recoverRefund : recoverWithdrawal;
+    action(recoveryId)
+      .then((result) => {
+        console.log(
+          `\nResult: ${result.succeeded.length} succeeded, ${result.failed.length} failed`,
+        );
+        if (result.failed.length > 0) {
+          process.exit(1);
+        }
+      })
+      .catch((e) => {
+        console.error("Recovery failed:", e.message ?? e);
+        process.exit(1);
+      });
+  }
 }
