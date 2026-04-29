@@ -117,7 +117,9 @@ export function isTransientBuildRpcError(error: unknown): boolean {
   ].some((fragment) => message.toLowerCase().includes(fragment));
 }
 
-async function withBuildRpcRetry<T>(operation: () => Promise<T>): Promise<T> {
+async function withBuildRpcRetry<T>(
+  operation: () => Promise<T>,
+): Promise<T> {
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= BUILD_RPC_RETRY_MAX_ATTEMPTS; attempt++) {
@@ -223,7 +225,7 @@ export async function lowkieBuildDeposits(
       `  Notes:     ${redactDenominationSummary(summarizeDenominationNotes(denominationNotes), denominationNotes.length)}`,
     );
 
-    const { recoveryId, transactionsBase64 } = await buildDepositTransactions({
+    const { recoveryId, transactionsBase64, noteCount } = await buildDepositTransactions({
       provider,
       program,
       senderPubkey,
@@ -237,7 +239,7 @@ export async function lowkieBuildDeposits(
       runtimeSafety,
     });
 
-    return { recoveryId, transactionsBase64 };
+    return { recoveryId, transactionsBase64, noteCount };
   });
 }
 
@@ -341,11 +343,17 @@ export async function lowkieSend(
 
   // 2. Sign transactions (Mocking frontend signing here on backend)
   const signedTxs = transactionsBase64.map((txB64) => {
-    const tx = anchor.web3.VersionedTransaction.deserialize(
-      Buffer.from(txB64, "base64"),
-    );
-    tx.sign([senderKp]);
-    return Buffer.from(tx.serialize()).toString("base64");
+    const txBuffer = Buffer.from(txB64, "base64");
+
+    try {
+      const tx = anchor.web3.VersionedTransaction.deserialize(txBuffer);
+      tx.sign([senderKp]);
+      return Buffer.from(tx.serialize()).toString("base64");
+    } catch {
+      const tx = anchor.web3.Transaction.from(txBuffer);
+      tx.sign(senderKp);
+      return Buffer.from(tx.serialize()).toString("base64");
+    }
   });
 
   // 3. Submit

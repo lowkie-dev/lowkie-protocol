@@ -472,18 +472,8 @@ fastify.register(async (instance) => {
 
   instance.get("/api/recoverable", async (request, reply) => {
     try {
-      // Listing only requires the wallet address as a query param.
-      // The server filters recovery files by sender/recipient ownership, so no
-      // signature is needed for this read-only endpoint. Mutating operations
-      // (/api/recover and /api/recovery/:id DELETE) still require signed auth.
-      const walletAddress = resolveRecoveryWalletAddress(request);
+      const walletAddress = authorizeRecoveryRequest(request, reply);
       if (!walletAddress) {
-        reply
-          .status(400)
-          .send({
-            success: false,
-            error: "Missing required query param: wallet",
-          });
         return;
       }
 

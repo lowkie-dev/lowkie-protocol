@@ -343,16 +343,16 @@ Current pool tiers:
 
 ### Toolchain versions
 
-| Tool                      | Version    |
-| ------------------------- | ---------- |
-| arcium CLI                | `0.6.3`    |
-| `arcium-anchor`           | `0.9.5`    |
-| `anchor-lang`             | `0.32.1`   |
-| `anchor-spl`              | `0.32.1`   |
-| `@arcium-hq/client`       | `^0.9.5`   |
-| `@coral-xyz/anchor`       | `^0.32.0`  |
-| Solana CLI                | `2.3.0`    |
-| Node.js                   | `20.18.0`  |
+| Tool                | Version   |
+| ------------------- | --------- |
+| arcium CLI          | `0.6.3`   |
+| `arcium-anchor`     | `0.9.5`   |
+| `anchor-lang`       | `0.32.1`  |
+| `anchor-spl`        | `0.32.1`  |
+| `@arcium-hq/client` | `^0.9.5`  |
+| `@coral-xyz/anchor` | `^0.32.0` |
+| Solana CLI          | `2.3.0`   |
+| Node.js             | `20.18.0` |
 
 ### Relation to Arcium C-SPL
 

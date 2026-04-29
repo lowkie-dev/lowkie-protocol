@@ -25,6 +25,7 @@ export interface RecoveryFile {
   programId: string;
   rpcUrl: string;
   notes: RecoverableNote[];
+  transactionNoteGroups?: number[][];
 }
 
 const RECOVERY_DIR = process.env.LOWKIE_RECOVERY_DIR ?? "./recovery";

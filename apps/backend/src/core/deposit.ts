@@ -44,6 +44,25 @@ const DEPOSIT_RETRY_BASE_MS = parseInt(
   process.env.DEPOSIT_RETRY_BASE_MS ?? "5000",
 );
 
+function parsePositiveIntegerEnv(name: string, fallback: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) {
+    return fallback;
+  }
+
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+const DEPOSIT_MAX_INSTRUCTIONS_PER_TX = parsePositiveIntegerEnv(
+  "DEPOSIT_MAX_INSTRUCTIONS_PER_TX",
+  2,
+);
+const DEPOSIT_TARGET_TX_BYTES = parsePositiveIntegerEnv(
+  "DEPOSIT_TARGET_TX_BYTES",
+  1100,
+);
+
 export interface DepositedSubNote {
   noteSecret: Uint8Array;
   withdrawKey: Uint8Array;
@@ -80,6 +99,7 @@ export interface BuildDepositTransactionsResult {
   recoveryId: string;
   subNotes: DepositedSubNote[];
   transactionsBase64: string[];
+  noteCount: number;
 }
 
 export interface ExecuteSignedDepositsParams {
@@ -100,12 +120,20 @@ export interface DepositPhaseResult {
 
 function extractSignedTransactionSignature(txBuffer: Buffer): string | null {
   try {
-    const tx = anchor.web3.VersionedTransaction.deserialize(txBuffer);
-    const [signature] = tx.signatures;
-    if (!signature || signature.every((byte) => byte === 0)) {
-      return null;
+    try {
+      const tx = anchor.web3.VersionedTransaction.deserialize(txBuffer);
+      const [signature] = tx.signatures;
+      if (!signature || signature.every((byte) => byte === 0)) {
+        return null;
+      }
+      return bs58.encode(signature);
+    } catch {
+      const tx = anchor.web3.Transaction.from(txBuffer);
+      if (!tx.signature || tx.signature.every((byte) => byte === 0)) {
+        return null;
+      }
+      return bs58.encode(tx.signature);
     }
-    return bs58.encode(signature);
   } catch {
     return null;
   }
@@ -153,6 +181,7 @@ export async function buildDepositTransactions(
   const mxeKey = await fetchMXEKey(provider, programId);
   const subNotes: DepositedSubNote[] = [];
   const transactionsBase64: string[] = [];
+  const transactionNoteGroups: number[][] = [];
   const poolCache = new Map<
     string,
     { poolPDA: PublicKey; vaultPDA: PublicKey }
@@ -190,6 +219,61 @@ export async function buildDepositTransactions(
     poolCache.set(key, resolved);
     return resolved;
   }
+
+  const latestBlockhash = await provider.connection.getLatestBlockhash(
+    "confirmed",
+  );
+  const compileDepositTransaction = (
+    instructions: anchor.web3.TransactionInstruction[],
+  ) => {
+    const tx = new anchor.web3.Transaction({
+      feePayer: senderPubkey,
+      blockhash: latestBlockhash.blockhash,
+      lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
+    });
+    tx.add(...instructions);
+    return tx;
+  };
+  const getSerializedDepositTransactionSize = (
+    instructions: anchor.web3.TransactionInstruction[],
+  ): number | null => {
+    try {
+      return compileDepositTransaction(instructions).serialize({
+        requireAllSignatures: false,
+        verifySignatures: false,
+      }).length;
+    } catch (error) {
+      if (
+        error instanceof RangeError ||
+        (error instanceof Error &&
+          error.message.toLowerCase().includes("transaction too large"))
+      ) {
+        return null;
+      }
+      throw error;
+    }
+  };
+  let pendingInstructions: anchor.web3.TransactionInstruction[] = [];
+  let pendingNoteIndexes: number[] = [];
+
+  const flushPendingTransaction = () => {
+    if (pendingInstructions.length === 0) {
+      return;
+    }
+
+    const tx = compileDepositTransaction(pendingInstructions);
+    transactionsBase64.push(
+      Buffer.from(
+        tx.serialize({
+          requireAllSignatures: false,
+          verifySignatures: false,
+        }),
+      ).toString("base64"),
+    );
+    transactionNoteGroups.push([...pendingNoteIndexes]);
+    pendingInstructions = [];
+    pendingNoteIndexes = [];
+  };
 
   for (let index = 0; index < denominationNotes.length; index++) {
     const subAmount = denominationNotes[index];
@@ -252,17 +336,6 @@ export async function buildDepositTransactions(
       })
       .instruction();
 
-    const latestBlockhash =
-      await provider.connection.getLatestBlockhash("confirmed");
-    const messageV0 = new anchor.web3.TransactionMessage({
-      payerKey: senderPubkey,
-      recentBlockhash: latestBlockhash.blockhash,
-      instructions: [ix],
-    }).compileToV0Message();
-    const tx = new anchor.web3.VersionedTransaction(messageV0);
-
-    transactionsBase64.push(Buffer.from(tx.serialize()).toString("base64"));
-
     subNotes.push({
       noteSecret,
       withdrawKey,
@@ -284,7 +357,35 @@ export async function buildDepositTransactions(
       notePda: notePDA.toBase58(),
       offsetHex: offset.toString("hex"),
     });
+
+    const noteIndex = recoveryData.notes.length - 1;
+    const nextInstructions = [...pendingInstructions, ix];
+    const nextTxSize = getSerializedDepositTransactionSize(nextInstructions);
+    const shouldFlushPendingFirst =
+      pendingInstructions.length > 0 &&
+      (nextInstructions.length > DEPOSIT_MAX_INSTRUCTIONS_PER_TX ||
+        nextTxSize === null ||
+        nextTxSize > DEPOSIT_TARGET_TX_BYTES);
+
+    if (shouldFlushPendingFirst) {
+      flushPendingTransaction();
+    }
+
+    if (pendingInstructions.length === 0) {
+      const singleInstructionTxSize = getSerializedDepositTransactionSize([ix]);
+      if (singleInstructionTxSize === null) {
+        throw new Error(
+          `Single deposit transaction for ${formatSol(subAmount)} exceeds the maximum transaction size.`,
+        );
+      }
+    }
+
+    pendingInstructions.push(ix);
+    pendingNoteIndexes.push(noteIndex);
   }
+
+  flushPendingTransaction();
+  recoveryData.transactionNoteGroups = transactionNoteGroups;
 
   writeRecoveryFile(recoveryData);
   console.log(`\n💾 Recovery file created: ${recoveryFilePath(recoveryId)}`);
@@ -315,7 +416,12 @@ export async function buildDepositTransactions(
     );
   }
 
-  return { recoveryId, subNotes, transactionsBase64 };
+  return {
+    recoveryId,
+    subNotes,
+    transactionsBase64,
+    noteCount: subNotes.length,
+  };
 }
 
 export async function executeSignedDeposits(
@@ -338,6 +444,17 @@ export async function executeSignedDeposits(
   const depositReceipts: DepositReceipt[] = [];
   let depositFailure: Error | null = null;
   const programId = new PublicKey(recoveryData.programId);
+  const transactionNoteGroups =
+    recoveryData.transactionNoteGroups &&
+    recoveryData.transactionNoteGroups.length > 0
+      ? recoveryData.transactionNoteGroups
+      : recoveryData.notes.map((_, index) => [index]);
+
+  if (transactionNoteGroups.length !== signedTransactionsBase64.length) {
+    throw new Error(
+      `Expected ${transactionNoteGroups.length} signed transactions but received ${signedTransactionsBase64.length}.`,
+    );
+  }
 
   const subNotes: DepositedSubNote[] = recoveryData.notes.map((note) => ({
     noteSecret: new Uint8Array(note.noteSecret),
@@ -353,20 +470,25 @@ export async function executeSignedDeposits(
     notePDA: new PublicKey(note.notePda),
   }));
 
-  const submittedIndexes: number[] = [];
+  const submittedTransactionIndexes: number[] = [];
 
   for (let index = 0; index < signedTransactionsBase64.length; index++) {
     const txBase64 = signedTransactionsBase64[index];
     let txBuffer = Buffer.from(txBase64, "base64");
-    const note = recoveryData.notes[index];
-    const notePDA = new PublicKey(note.notePda);
-    const subAmount = BigInt(note.denominationLamports);
+    const noteIndexes = transactionNoteGroups[index];
+
+    if (!noteIndexes || noteIndexes.length === 0) {
+      throw new Error(`Transaction group ${index} does not contain any notes.`);
+    }
+
+    const primaryNote = recoveryData.notes[noteIndexes[0]];
+    const notePDA = new PublicKey(primaryNote.notePda);
 
     console.log(
-      `\n📤 Deposit ${index + 1}/${signedTransactionsBase64.length}${logSensitiveDataEnabled() ? `: ${redactStepLabel(formatSol(subAmount))} pool` : ""}`,
+      `\n📤 Deposit ${index + 1}/${signedTransactionsBase64.length} (${noteIndexes.length} note(s))${logSensitiveDataEnabled() ? `: ${redactStepLabel(formatSol(BigInt(primaryNote.denominationLamports)))} pool` : ""}`,
     );
 
-    let depositSig = note.depositSig;
+    let depositSig = primaryNote.depositSig;
 
     for (let attempt = 0; attempt <= DEPOSIT_MAX_RETRIES; attempt++) {
       try {
@@ -384,7 +506,9 @@ export async function executeSignedDeposits(
             confirmedRpcOptions(runtimeSafety.skipPreflight),
           );
 
-          note.depositSig = depositSig;
+          for (const noteIndex of noteIndexes) {
+            recoveryData.notes[noteIndex].depositSig = depositSig;
+          }
           writeRecoveryFile(recoveryData);
           console.log(`   ✅ Tx: ${depositSig}`);
         }
@@ -397,16 +521,27 @@ export async function executeSignedDeposits(
         if (/blockhash not found/i.test(errorMessage)) {
           if (senderKp.publicKey.toBase58() === recoveryData.sender) {
             // Sender keypair available: refresh blockhash and re-sign
-            const refreshedTx =
-              anchor.web3.VersionedTransaction.deserialize(txBuffer);
             const latestBlockhash =
               await provider.connection.getLatestBlockhash("confirmed");
-            refreshedTx.message.recentBlockhash = latestBlockhash.blockhash;
-            refreshedTx.sign([senderKp]);
-            txBuffer = Buffer.from(refreshedTx.serialize());
+            try {
+              const refreshedTx =
+                anchor.web3.VersionedTransaction.deserialize(txBuffer);
+              refreshedTx.message.recentBlockhash = latestBlockhash.blockhash;
+              refreshedTx.sign([senderKp]);
+              txBuffer = Buffer.from(refreshedTx.serialize());
+            } catch {
+              const refreshedTx = anchor.web3.Transaction.from(txBuffer);
+              refreshedTx.recentBlockhash = latestBlockhash.blockhash;
+              refreshedTx.lastValidBlockHeight =
+                latestBlockhash.lastValidBlockHeight;
+              refreshedTx.sign(senderKp);
+              txBuffer = Buffer.from(refreshedTx.serialize());
+            }
             signedTransactionsBase64[index] = txBuffer.toString("base64");
-            note.depositSig = undefined;
-            delete note.depositSig;
+            for (const noteIndex of noteIndexes) {
+              recoveryData.notes[noteIndex].depositSig = undefined;
+              delete recoveryData.notes[noteIndex].depositSig;
+            }
             writeRecoveryFile(recoveryData);
             console.warn(
               "   ⚠️ Transaction blockhash expired; refreshed and re-signed with a new blockhash.",
@@ -432,7 +567,9 @@ export async function executeSignedDeposits(
           const existingSig = extractSignedTransactionSignature(txBuffer);
           if (existingSig) {
             depositSig = existingSig;
-            note.depositSig = existingSig;
+            for (const noteIndex of noteIndexes) {
+              recoveryData.notes[noteIndex].depositSig = existingSig;
+            }
             writeRecoveryFile(recoveryData);
             console.warn(
               "   ⚠️ Transaction was already processed on-chain; resuming from the signed transaction signature.",
@@ -451,7 +588,10 @@ export async function executeSignedDeposits(
               `   ⚠️ Deposit tx did not land (note account missing). Will resubmit.`,
             );
             depositSig = undefined;
-            note.depositSig = undefined;
+            for (const noteIndex of noteIndexes) {
+              recoveryData.notes[noteIndex].depositSig = undefined;
+              delete recoveryData.notes[noteIndex].depositSig;
+            }
             writeRecoveryFile(recoveryData);
           }
         }
@@ -477,7 +617,7 @@ export async function executeSignedDeposits(
       break;
     }
 
-    submittedIndexes.push(index);
+    submittedTransactionIndexes.push(index);
 
     if (
       index < signedTransactionsBase64.length - 1 &&
@@ -492,73 +632,77 @@ export async function executeSignedDeposits(
     }
   }
 
-  for (const index of submittedIndexes) {
-    const note = recoveryData.notes[index];
-    const notePDA = new PublicKey(note.notePda);
-    const subAmount = BigInt(note.denominationLamports);
-    const depositSig = note.depositSig;
+  finalizationLoop: for (const txIndex of submittedTransactionIndexes) {
+    const noteIndexes = transactionNoteGroups[txIndex]!;
 
     console.log(
-      `   ⏳ Waiting for MPC result for deposit ${index + 1}/${signedTransactionsBase64.length}...`,
+      `   ⏳ Waiting for MPC result for deposit ${txIndex + 1}/${signedTransactionsBase64.length} (${noteIndexes.length} note(s))...`,
     );
 
-    await awaitComputationFinalization(
-      provider,
-      new anchor.BN(note.offsetHex, "hex"),
-      programId,
-      "confirmed",
-    );
+    for (const noteIndex of noteIndexes) {
+      const note = recoveryData.notes[noteIndex];
+      const notePDA = new PublicKey(note.notePda);
+      const subAmount = BigInt(note.denominationLamports);
+      const depositSig = note.depositSig;
 
-    const noteAfterDeposit = await (program.account as any).noteAccount.fetch(
-      notePDA,
-    );
+      await awaitComputationFinalization(
+        provider,
+        new anchor.BN(note.offsetHex, "hex"),
+        programId,
+        "confirmed",
+      );
 
-    const noteStatus = noteAfterDeposit.status as Record<string, unknown>;
-    if (noteStatus.failed) {
-      if (!noteAfterDeposit.poolCreditApplied) {
-        console.warn(
-          "   ⚠️ Deposit callback failed before encrypted pool credit; refunding sender...",
+      const noteAfterDeposit = await (program.account as any).noteAccount.fetch(
+        notePDA,
+      );
+
+      const noteStatus = noteAfterDeposit.status as Record<string, unknown>;
+      if (noteStatus.failed) {
+        if (!noteAfterDeposit.poolCreditApplied) {
+          console.warn(
+            "   ⚠️ Deposit callback failed before encrypted pool credit; refunding sender...",
+          );
+          const poolPDA = derivePoolPda(programId, subAmount);
+          const vaultPDA = deriveVaultPda(programId, subAmount);
+          const nullifierRecordPDA = deriveNullifierRecordPda(
+            programId,
+            Buffer.from(note.nullifierHash),
+          );
+          const refundSig = await refundFailedDeposit(
+            program,
+            senderKp,
+            notePDA,
+            nullifierRecordPDA,
+            poolPDA,
+            vaultPDA,
+            Buffer.from(note.noteHash),
+          );
+          console.warn(`   ✅ Refunded failed deposit: ${refundSig}`);
+        }
+
+        depositFailure = new Error(
+          noteAfterDeposit.poolCreditApplied
+            ? `Deposit for note ${note.noteHash} failed after pool credit and requires operator attention.`
+            : `Deposit for note ${note.noteHash} failed before pool credit and was refunded.`,
         );
-        const poolPDA = derivePoolPda(programId, subAmount);
-        const vaultPDA = deriveVaultPda(programId, subAmount);
-        const nullifierRecordPDA = deriveNullifierRecordPda(
-          programId,
-          Buffer.from(note.nullifierHash),
-        );
-        const refundSig = await refundFailedDeposit(
-          program,
-          senderKp,
-          notePDA,
-          nullifierRecordPDA,
-          poolPDA,
-          vaultPDA,
-          Buffer.from(note.noteHash),
-        );
-        console.warn(`   ✅ Refunded failed deposit: ${refundSig}`);
+        break finalizationLoop;
       }
 
-      depositFailure = new Error(
-        noteAfterDeposit.poolCreditApplied
-          ? `Deposit for note ${note.noteHash} failed after pool credit and requires operator attention.`
-          : `Deposit for note ${note.noteHash} failed before pool credit and was refunded.`,
-      );
-      break;
-    }
+      if (!noteStatus.ready) {
+        depositFailure = new Error(
+          `Deposit for note ${note.noteHash} did not reach the Ready state.`,
+        );
+        break finalizationLoop;
+      }
 
-    if (!noteStatus.ready) {
-      depositFailure = new Error(
-        `Deposit for note ${note.noteHash} did not reach the Ready state.`,
-      );
-      break;
+      console.log("   ✅ MPC confirmed");
+      depositReceipts.push({
+        noteHashHex: Buffer.from(note.noteHash).toString("hex"),
+        notePda: notePDA.toBase58(),
+        denominationLamports: subAmount.toString(),
+        depositSig: depositSig!,
+      });
     }
-
-    console.log("   ✅ MPC confirmed");
-    depositReceipts.push({
-      noteHashHex: Buffer.from(note.noteHash).toString("hex"),
-      notePda: notePDA.toBase58(),
-      denominationLamports: subAmount.toString(),
-      depositSig: depositSig!,
-    });
   }
 
   if (depositReceipts.length === 0 && depositFailure) {
